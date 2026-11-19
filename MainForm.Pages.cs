@@ -539,7 +539,7 @@ public sealed partial class MainForm
 
             new MenuEntry(0, "\uE8EF", "Calculator", targetPage: "Calc"),
             new MenuEntry(0, "\uE962", "Autoclicker", targetPage: "Auto"),
-            new MenuEntry(0, "\E768", "Macros", targetPage: "Macros"),
+            new MenuEntry(0, "", "Macros", targetPage: "Macros"),
 
             Act("", "Pin last window on top", PinLastWindow),
 

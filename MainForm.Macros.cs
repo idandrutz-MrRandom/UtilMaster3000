@@ -292,7 +292,7 @@ public sealed partial class MainForm
         }
         else
         {
-            list.Add(new MenuEntry(0, "", $"Record a new macro  ({recKey})",
+            list.Add(new MenuEntry(0, "", $"Record a new macro  ({recKey})",
                 run: ToggleMacroRecording,
                 expandText: "Record a new macro" + NL +
                             "Hides this menu and records everything you do with the mouse and keyboard." + NL +
