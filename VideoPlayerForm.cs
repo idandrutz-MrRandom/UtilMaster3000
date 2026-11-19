@@ -1875,6 +1875,49 @@ internal sealed class VideoPlayerForm : Form
         ShowEndScreen(allowCountdown: true);
     }
 
+    private async Task ResumeAfterFailureAsync(double resumeAt, int tryNumber)
+    {
+        try
+        {
+            string id = Current.Id;
+            int target = index;
+
+            // A moment for Windows to let go of the failed stream.
+            await Task.Delay(300 * tryNumber);
+
+            StreamPlan plan = await YtDlp.PlanAsync(id, null, YtDlp.StartHeight, CancellationToken.None);
+
+            OnUi(() =>
+            {
+                if (IsDisposed || index != target)
+                    return;
+
+                if (!plan.Progressive && plan.Inputs.Count > 0)
+                {
+                    bridgeBase = new BridgeSpec(
+                        plan.Inputs.Select(x => new BridgeInput(x.Url, x.Headers)).ToList(),
+                        0,
+                        plan.CopyVideo);
+                }
+
+                try
+                {
+                    media.Close();
+                }
+                catch
+                {
+                    // Nothing to reset.
+                }
+
+                RestartBridge(resumeAt);
+            });
+        }
+        catch (Exception ex)
+        {
+            DebugLog?.Invoke("resume after failure: " + ex.Message);
+        }
+    }
+
     private void OnFailed(Exception? error)
     {
         // Direct playback was refused: convert it instead (once).
@@ -1890,19 +1933,49 @@ internal sealed class VideoPlayerForm : Form
                 return;
         }
 
-        // A streamed video whose addresses went bad: look it up again,
-        // quietly, before bothering you with an error.
-        if (Current.File == null && !LocalMedia.IsLocalId(Current.Id) && streamRetries < 2)
+        // A streamed video that fails (stale addresses, Windows' "catastrophic
+        // failure" while opening...): reset the player and carry on, quietly.
+        if (Current.File == null && !LocalMedia.IsLocalId(Current.Id) && streamRetries < 4)
         {
             streamRetries++;
-            DebugLog?.Invoke("stream failed (" + error?.Message + "), looking it up again");
-            Say("Retrying...");
+            DebugLog?.Invoke($"stream failed ({error?.Message}), trying again ({streamRetries} of 4)");
+            Say("Reconnecting...");
 
             YtDlp.Forget(Current.Id);
             resolveCts?.Cancel();
+
+            // It had been playing: resume at the same place with fresh addresses.
+            if (Opened && lastPlayPosition > 1 && bridged && bridgeBase != null)
+            {
+                double resumeAt = Math.Max(0, lastPlayPosition - 1);
+                int tryNumber = streamRetries;
+                _ = ResumeAfterFailureAsync(resumeAt, tryNumber);
+                return;
+            }
+
+            // It never started: reset the player and start the lookup again.
             bridged = false;
             bridgeBase = null;
-            _ = StreamAsync(Current, index);
+            Opened = false;
+
+            try
+            {
+                media.Close();
+            }
+            catch
+            {
+                // Nothing to reset.
+            }
+
+            int delay = 400 * streamRetries;
+            int target = index;
+
+            _ = Task.Delay(delay).ContinueWith(_ => OnUi(() =>
+            {
+                if (!IsDisposed && index == target)
+                    _ = StreamAsync(Current, index);
+            }));
+
             return;
         }
 
@@ -1912,15 +1985,25 @@ internal sealed class VideoPlayerForm : Form
             ? "\n\nOpen it with your default video player instead?"
             : "";
 
+        bool streamed = Current.File == null && !LocalMedia.IsLocalId(Current.Id);
+
         DialogResult answer = MessageBox.Show(
             this,
             "This video could not be played in the built-in player:\n\n" + Failure +
             (Failure.Contains("0xC00D", StringComparison.OrdinalIgnoreCase)
                 ? "\n\nWindows could not decode this format."
-                : "") + tail,
+                : "") + tail + (streamed ? "\n\nTry again?" : ""),
             "UtilTube",
-            Current.File != null ? MessageBoxButtons.YesNo : MessageBoxButtons.OK,
+            Current.File != null || streamed ? MessageBoxButtons.YesNo : MessageBoxButtons.OK,
             MessageBoxIcon.Warning);
+
+        // Streams often come back a moment later: offer another go.
+        if (answer == DialogResult.Yes && streamed)
+        {
+            streamRetries = 0;
+            Open(index);
+            return;
+        }
 
         if (answer == DialogResult.Yes && Current.File != null)
         {
@@ -2587,11 +2670,53 @@ internal sealed class VideoPlayerForm : Form
             BorderThickness = new System.Windows.Thickness(2),
             Cursor = System.Windows.Input.Cursors.Hand,
             Focusable = false,
-            Tag = video
+            Tag = video,
+            Style = ThemedCardStyle()
         };
 
         card.Click += (_, _) => PlayChoice(video);
         return card;
+    }
+
+    private static System.Windows.Style? cardStyle;
+
+    // Cards: no bright Windows hover; a soft tint of the accent instead, so text stays readable.
+    private static System.Windows.Style ThemedCardStyle()
+    {
+        if (cardStyle != null)
+            return cardStyle;
+
+        string hover = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.14f));
+        string press = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.24f));
+
+        string xaml = $@"
+<Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+       xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
+       TargetType=""{{x:Type Button}}"">
+  <Setter Property=""Template"">
+    <Setter.Value>
+      <ControlTemplate TargetType=""{{x:Type Button}}"">
+        <Border x:Name=""box"" Background=""{{TemplateBinding Background}}""
+                BorderBrush=""{{TemplateBinding BorderBrush}}""
+                BorderThickness=""{{TemplateBinding BorderThickness}}""
+                CornerRadius=""4"" Padding=""{{TemplateBinding Padding}}"">
+          <ContentPresenter/>
+        </Border>
+        <ControlTemplate.Triggers>
+          <Trigger Property=""IsMouseOver"" Value=""True"">
+            <Setter TargetName=""box"" Property=""Background"" Value=""{hover}""/>
+          </Trigger>
+          <Trigger Property=""IsPressed"" Value=""True"">
+            <Setter TargetName=""box"" Property=""Background"" Value=""{press}""/>
+          </Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>";
+
+        cardStyle = (System.Windows.Style)System.Windows.Markup.XamlReader.Parse(xaml);
+        return cardStyle;
     }
 
     private void FillThumb(WpfControls.Image image, TubeVideo video)

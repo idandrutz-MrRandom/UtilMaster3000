@@ -157,8 +157,18 @@ internal sealed class TubeSettings
     public int DownloadDeleteHours { get; set; } = 2;
 }
 
+/// <summary>A playlist you loaded before (kept so it is one click away).</summary>
+internal sealed class SavedPlaylist
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public int Count { get; set; }
+    public DateTime Loaded { get; set; } = DateTime.Now;
+}
+
 internal sealed class TubeData
 {
+    public List<SavedPlaylist> Playlists { get; set; } = new();
     public List<TubeVideo> Videos { get; set; } = new();
     public List<TubeSource> Sources { get; set; } = new();
     public TubeSettings Settings { get; set; } = new();
@@ -344,6 +354,38 @@ internal sealed class TubeLibrary
     {
         lock (gate)
             return data.Videos.ToList();
+    }
+
+    /// <summary>Playlists you loaded, newest first.</summary>
+    public List<SavedPlaylist> Playlists()
+    {
+        lock (gate)
+            return data.Playlists.OrderByDescending(p => p.Loaded).ToList();
+    }
+
+    public void RememberPlaylist(string id, string title, int count)
+    {
+        lock (gate)
+        {
+            data.Playlists.RemoveAll(p => p.Id == id);
+            data.Playlists.Add(new SavedPlaylist { Id = id, Title = title, Count = count, Loaded = DateTime.Now });
+
+            if (data.Playlists.Count > 40)
+            {
+                foreach (SavedPlaylist old in data.Playlists.OrderBy(p => p.Loaded).Take(data.Playlists.Count - 40).ToList())
+                    data.Playlists.Remove(old);
+            }
+        }
+
+        Changed();
+    }
+
+    public void ForgetPlaylist(string id)
+    {
+        lock (gate)
+            data.Playlists.RemoveAll(p => p.Id == id);
+
+        Changed();
     }
 
     public List<TubeSource> Sources()

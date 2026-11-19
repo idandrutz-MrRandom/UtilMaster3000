@@ -38,6 +38,7 @@ internal sealed class TubeClient : Form
         History,
         Later,
         Queue,
+        Playlists,
         Sources,
         Settings
     }
@@ -333,7 +334,7 @@ internal sealed class TubeClient : Form
     {
         (View.Home, "home"), (View.Subs, "subs"), (View.Library, "library"),
         (View.History, "history"), (View.Later, "later"), (View.Queue, "queue"),
-        (View.Sources, "sources"), (View.Settings, "settings")
+        (View.Playlists, "playlists"), (View.Sources, "sources"), (View.Settings, "settings")
     };
 
     private void BuildSidebar()
@@ -350,6 +351,7 @@ internal sealed class TubeClient : Form
             new SideBar.Entry("history", "", "History"),
             new SideBar.Entry("later", "", "Watch later"),
             new SideBar.Entry("queue", "", "Downloads"),
+            new SideBar.Entry("playlists", "\uE8FD", "Playlists"),
             SideBar.Entry.Divider(),
             new SideBar.Entry("sources", "", "Sources"),
             new SideBar.Entry("settings", "", "Settings")
@@ -446,12 +448,14 @@ internal sealed class TubeClient : Form
 
         BuildSourcesView();
         BuildSettingsView();
+        BuildPlaylistBar();
 
         body.Controls.Add(grid);
         body.Controls.Add(emptyAction);
         body.Controls.Add(empty);
         body.Controls.Add(sourcesView);
         body.Controls.Add(settingsView);
+        body.Controls.Add(playlistBar);
 
         emptyAction.BringToFront();
 
@@ -604,6 +608,7 @@ internal sealed class TubeClient : Form
         View.History => "Watch history",
         View.Later => "Watch later",
         View.Queue => "Downloads",
+        View.Playlists => playlistTitle.Length > 0 ? playlistTitle : "Playlists",
         View.Sources => "Sources",
         _ => "Settings"
     };
@@ -640,7 +645,12 @@ internal sealed class TubeClient : Form
         }
 
         bool videos = target is View.Home or View.Subs or View.Search or
-            View.Library or View.History or View.Later or View.Queue;
+            View.Library or View.History or View.Later or View.Queue or View.Playlists;
+
+        playlistBar.Visible = target == View.Playlists;
+
+        if (target == View.Playlists)
+            RefreshPlaylistRecent();
 
         grid.Visible = videos;
         sourcesView.Visible = target == View.Sources;
@@ -748,6 +758,9 @@ internal sealed class TubeClient : Form
 
             case View.Search:
                 return searchResults.Select(Resolve).ToList();
+
+            case View.Playlists:
+                return playlistResults.Select(Resolve).ToList();
 
             case View.Library:
             {
@@ -884,6 +897,11 @@ internal sealed class TubeClient : Form
                 break;
             }
 
+            case View.Playlists:
+                empty.Text = "Paste a playlist link above and press Load\n(or pick one of the playlists you loaded before).\n\n" +
+                             "Then play all of it, shuffle it, or save it for offline viewing.";
+                break;
+
             case View.Library:
                 empty.Text = libFilter != LibFilter.All || searchBox.Text.Length > 0
                     ? "No saved videos match."
@@ -916,10 +934,24 @@ internal sealed class TubeClient : Form
         }
     }
 
+    private static string PlaylistSummary(List<TubeVideo> items)
+    {
+        TimeSpan total = TimeSpan.FromSeconds(items.Sum(v => (long)v.Duration));
+
+        string length = total.TotalHours >= 1
+            ? $"{(int)total.TotalHours} h {total.Minutes} min"
+            : $"{(int)total.TotalMinutes} min";
+
+        return $"{items.Count} videos  -  {length} in all";
+    }
+
     private string SubtitleFor(List<TubeVideo> items)
     {
         switch (view)
         {
+            case View.Playlists:
+                return items.Count == 0 ? "" : PlaylistSummary(items);
+
             case View.Home:
                 return library.HomeUpdated != null
                     ? $"{items.Count} videos  -  updated {Ago(library.HomeUpdated.Value)}"
@@ -1246,6 +1278,13 @@ internal sealed class TubeClient : Form
             return;
 
         searchBox.Text = query;
+
+        // A playlist link (or id) opens as a playlist, not as search results.
+        if (YtDlp.ExtractVideoId(query) == null && YtDlp.ExtractPlaylistId(query) != null)
+        {
+            await LoadPlaylistAsync(query);
+            return;
+        }
 
         if (!await EnsureReady())
             return;
@@ -1674,6 +1713,242 @@ internal sealed class TubeClient : Form
         };
 
         return menu;
+    }
+
+    // --------------------------------------------------
+    // PLAYLISTS: load any playlist, play it, shuffle it, save it
+    // --------------------------------------------------
+
+    private readonly Panel playlistBar = new();
+    private readonly TextBox playlistBox = new();
+    private readonly ComboBox playlistRecent = new();
+    private List<VideoInfo> playlistResults = new();
+    private string playlistTitle = "";
+    private CancellationTokenSource? playlistCts;
+    private bool fillingRecent;
+
+    private void BuildPlaylistBar()
+    {
+        playlistBar.Dock = DockStyle.Top;
+        playlistBar.Height = 50;
+        playlistBar.BackColor = Theme.Background;
+        playlistBar.Visible = false;
+
+        playlistBox.Location = new Point(22, 12);
+        playlistBox.Size = new Size(330, 26);
+        playlistBox.BackColor = Theme.Search;
+        playlistBox.ForeColor = Theme.Strong;
+        playlistBox.BorderStyle = BorderStyle.FixedSingle;
+        playlistBox.PlaceholderText = "Paste a playlist link or id...";
+        playlistBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                _ = LoadPlaylistAsync(playlistBox.Text);
+            }
+        };
+
+        playlistBar.Controls.Add(playlistBox);
+
+        int x = 360;
+
+        Button Add(string text, int width, Action action)
+        {
+            Button b = new()
+            {
+                Text = text,
+                Location = new Point(x, 9),
+                Size = new Size(width, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Theme.Search,
+                ForeColor = Theme.Strong,
+                Cursor = Cursors.Hand,
+                TabStop = false
+            };
+
+            b.FlatAppearance.BorderSize = 0;
+            b.Click += (_, _) => action();
+            playlistBar.Controls.Add(b);
+            x += width + 8;
+            return b;
+        }
+
+        Button load = Add("Load", 64, () => _ = LoadPlaylistAsync(playlistBox.Text));
+        load.BackColor = Theme.Accent;
+        load.ForeColor = Theme.Background;
+
+        Add("Paste", 64, () =>
+        {
+            if (Clipboard.ContainsText())
+            {
+                playlistBox.Text = Clipboard.GetText().Trim();
+                _ = LoadPlaylistAsync(playlistBox.Text);
+            }
+        });
+
+        playlistRecent.DropDownStyle = ComboBoxStyle.DropDownList;
+        playlistRecent.FlatStyle = FlatStyle.Flat;
+        playlistRecent.BackColor = Theme.Search;
+        playlistRecent.ForeColor = Theme.Strong;
+        playlistRecent.Location = new Point(x, 12);
+        playlistRecent.Width = 230;
+        playlistRecent.SelectionChangeCommitted += (_, _) =>
+        {
+            if (!fillingRecent && playlistRecent.SelectedItem is SavedPlaylist p)
+                _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
+        };
+
+        playlistBar.Controls.Add(playlistRecent);
+        x += 238;
+
+        Add("Play all", 78, PlayPlaylist);
+        Add("Shuffle", 74, () => PlayPlaylist(shuffle: true));
+        Add("Save all", 78, SavePlaylistOffline);
+    }
+
+    private void RefreshPlaylistRecent()
+    {
+        fillingRecent = true;
+
+        try
+        {
+            List<SavedPlaylist> saved = library.Playlists();
+
+            playlistRecent.Items.Clear();
+            playlistRecent.DisplayMember = nameof(SavedPlaylist.Title);
+
+            foreach (SavedPlaylist p in saved)
+                playlistRecent.Items.Add(p);
+
+            // Show the one on screen, or a hint when there are none yet.
+            int current = saved.FindIndex(p => p.Title == playlistTitle);
+
+            if (current >= 0)
+                playlistRecent.SelectedIndex = current;
+            else
+                playlistRecent.SelectedIndex = -1;
+        }
+        finally
+        {
+            fillingRecent = false;
+        }
+    }
+
+    private async Task LoadPlaylistAsync(string text)
+    {
+        text = text.Trim();
+
+        if (text.Length == 0)
+            return;
+
+        if (YtDlp.ExtractPlaylistId(text) == null)
+        {
+            SetMessage("That does not look like a playlist link or id.", 10);
+            return;
+        }
+
+        if (!await EnsureReady())
+            return;
+
+        playlistCts?.Cancel();
+        CancellationTokenSource cts = playlistCts = new CancellationTokenSource();
+
+        // Show the page straight away, with the old list until the new one arrives.
+        if (view != View.Playlists)
+            Go(View.Playlists);
+
+        SetMessage("Loading the playlist...", 90);
+
+        try
+        {
+            PlaylistData data = await YtDlp.PlaylistAsync(text, 500, cts.Token);
+
+            if (cts.IsCancellationRequested)
+                return;
+
+            if (data.Videos.Count == 0)
+            {
+                SetMessage("That playlist has no videos you can watch (it may be private: sign in first).", 15);
+                return;
+            }
+
+            playlistResults = data.Videos;
+            playlistTitle = data.Title;
+            playlistBox.Text = "";
+
+            library.RememberPlaylist(data.Id, data.Title, data.Videos.Count);
+
+            RefreshView();
+            RefreshPlaylistRecent();
+
+            SetMessage($"{data.Videos.Count} videos in \"{data.Title}\"", 10);
+
+            if (view == View.Playlists && grid.Items.Count > 0)
+            {
+                grid.Focus();
+                grid.SelectFirst();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer load took over.
+        }
+        catch (AuthExpiredException)
+        {
+            SetMessage("This playlist is private: sign in with Google first (Settings).", 15);
+        }
+        catch (Exception ex)
+        {
+            SetMessage("Could not load the playlist: " + ex.Message, 15);
+        }
+    }
+
+    private async void PlayPlaylist() => PlayPlaylist(shuffle: false);
+
+    private async void PlayPlaylist(bool shuffle)
+    {
+        List<TubeVideo> list = grid.Items.ToList();
+
+        if (list.Count == 0)
+        {
+            SetMessage("Load a playlist first.", 8);
+            return;
+        }
+
+        if (!await EnsureReady())
+            return;
+
+        if (shuffle)
+        {
+            Random random = new();
+            list = list.OrderBy(_ => random.Next()).ToList();
+        }
+
+        VideoPlayerForm.Play(list, 0);
+    }
+
+    private void SavePlaylistOffline()
+    {
+        List<TubeVideo> list = grid.Items.Where(v => v.State != VideoState.Done).ToList();
+
+        if (list.Count == 0)
+        {
+            SetMessage("Everything in this playlist is already saved.", 8);
+            return;
+        }
+
+        if (list.Count > 12 &&
+            MessageBox.Show(this, $"Save {list.Count} videos for offline viewing?\n\nThey download in the background, one after another.",
+                "UtilTube", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        foreach (TubeVideo v in list)
+            library.Enqueue(v);
+
+        SetMessage($"Saving {list.Count} videos...", 10);
     }
 
     // --------------------------------------------------

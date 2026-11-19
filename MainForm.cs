@@ -447,6 +447,7 @@ public sealed partial class MainForm : Form
     private string ParentPage() =>
         currentPage == "VaultEntry" ? "Vault" :
         currentPage == "TextTool" ? "Text" :
+        currentPage == "Grab" ? "Tools" :
         currentPage == "Notifications" ? "Style" :
         currentPage == "MacroEntry" ? "Macros" :
         currentPage == "MacroStep" ? "MacroEntry" : "home";
@@ -619,6 +620,7 @@ public sealed partial class MainForm : Form
             "Find" => "Search files and open windows...",
             "Clipboard" => "Search clipboard history...",
             "TextTool" => $"{textToolName}: type or paste text...",
+            "Grab" => "Paste a link (Instagram, TikTok, X, Reddit, SoundCloud, Spotify...)",
             "Macros" => "Search macros...",
             "MacroEntry" => "Filter steps, or type a new name to rename...",
             "MacroStep" => "Type x,y to set the position, or a time like 250 or 1.5s...",

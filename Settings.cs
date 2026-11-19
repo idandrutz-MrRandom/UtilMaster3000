@@ -50,6 +50,12 @@ internal sealed class AppSettings
     /// <summary>Menus slide out beside the launcher when you rest the mouse on them.</summary>
     public bool HoverSubmenus { get; set; } = true;
 
+    // Download by link
+    public string GrabFolder { get; set; } = "";
+    public bool GrabAudioOnly { get; set; }
+    public int GrabQuality { get; set; }              // 0 = best
+    public bool GrabCopy { get; set; } = true;
+
     // Global shortcut that opens the launcher (default Ctrl + Alt + U).
     public uint LauncherHotkeyModifiers { get; set; } = MOD_CONTROL | MOD_ALT;
     public int LauncherHotkeyKey { get; set; } = (int)Keys.U;

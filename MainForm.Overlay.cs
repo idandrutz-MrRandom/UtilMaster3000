@@ -205,6 +205,12 @@ public sealed partial class MainForm
                 "  (or move the mouse into the top-left corner)"));
         }
 
+        if (grabbing)
+        {
+            lines.Add((Theme.Accent,
+                $"DOWNLOADING from {grabName}  -  {grabText}  -  cancel in the launcher (Tools -> Download by link)"));
+        }
+
         if (IsRecording)
         {
             if (!screenRecordWatch.IsRunning)

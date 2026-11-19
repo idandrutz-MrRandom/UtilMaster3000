@@ -537,6 +537,7 @@ public sealed partial class MainForm
         {
             Act("\uE714", "UtilTube  (YouTube, offline)", () => OpenTube(null)),
 
+            new MenuEntry(0, "\uE896", "Download by link", targetPage: "Grab"),
             new MenuEntry(0, "\uE8EF", "Calculator", targetPage: "Calc"),
             new MenuEntry(0, "\uE962", "Autoclicker", targetPage: "Auto"),
             new MenuEntry(0, "", "Macros", targetPage: "Macros"),
@@ -1256,6 +1257,7 @@ public sealed partial class MainForm
             "TextTool" => TextToolPage(query),
             "Calc" => CalcPage(query),
             "Auto" => AutoClickPage(query),
+            "Grab" => GrabPage(query),
             "Macros" => MacrosPage(query),
             "Notifications" => NotificationsPage(query),
             "MacroEntry" => MacroEntryPage(query),
@@ -1403,6 +1405,14 @@ public sealed partial class MainForm
                 CopyValue(converted);
                 HideToTray();
             }));
+        }
+
+        if (LinkDownloader.LooksLikeLink(query) && YtDlp.ExtractVideoId(query) == null)
+        {
+            string linkSite = LinkDownloader.SiteName(query);
+            string linkText = query.Trim();
+
+            list.Add(ActIcon("\uE896", $"Download this link ({linkSite}) and copy the file", null, () => StartGrab(linkText)));
         }
 
         list.AddRange(AppIndex.Search(query, 5).Select(AppRow));

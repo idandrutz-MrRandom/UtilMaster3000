@@ -19,6 +19,9 @@ internal sealed record ProcResult(int ExitCode, string Stdout, string Stderr);
 
 internal sealed record DownloadProgress(double Percent, string Speed, string Eta);
 
+/// <summary>A loaded playlist: its title and videos.</summary>
+internal sealed record PlaylistData(string Id, string Title, string Channel, List<VideoInfo> Videos);
+
 internal sealed record StreamInput(string Url, Dictionary<string, string> Headers);
 
 /// <summary>One subtitle track of a video (a language, written by hand or automatic).</summary>
@@ -993,6 +996,112 @@ internal static class YtDlp
             Read("automatic_captions", true);
 
             return tracks;
+        }
+
+        if (YtAccount.SignedIn)
+        {
+            try
+            {
+                return await YtAccount.WithCookieFile(file => Run(file));
+            }
+            catch (AuthExpiredException)
+            {
+                // Fall back to anonymous below.
+            }
+        }
+
+        return await Run(null);
+    }
+
+    /// <summary>The playlist id in a link (any form with list=...) or a bare id.</summary>
+    public static string? ExtractPlaylistId(string text)
+    {
+        Match m = Regex.Match(text, @"[?&]list=([A-Za-z0-9_-]{2,})");
+
+        if (m.Success)
+            return m.Groups[1].Value;
+
+        string t = text.Trim();
+
+        return Regex.IsMatch(t, @"^(PL|UU|OL|LL|FL|RD)[A-Za-z0-9_-]{10,}$") || t is "WL" or "LL"
+            ? t
+            : null;
+    }
+
+    /// <summary>Loads a playlist (title + videos). Private ones need your account.</summary>
+    public static async Task<PlaylistData> PlaylistAsync(string linkOrId, int max, CancellationToken ct)
+    {
+        string id = ExtractPlaylistId(linkOrId)
+            ?? throw new InvalidOperationException("That does not look like a playlist link.");
+
+        string url = "https://www.youtube.com/playlist?list=" + id;
+
+        async Task<PlaylistData> Run(string? cookies)
+        {
+            List<string> args = new()
+            {
+                "--flat-playlist", "--dump-single-json", "--no-warnings", "--ignore-errors",
+                "--playlist-end", max.ToString()
+            };
+
+            if (cookies != null)
+            {
+                args.Add("--cookies");
+                args.Add(cookies);
+            }
+
+            args.Add(url);
+
+            ProcResult r = await RunAsync(args, ct);
+            string json = r.Stdout.Trim();
+
+            if (!json.StartsWith('{'))
+            {
+                string? error = LastError(r.Stderr);
+
+                if (error != null && LooksLikeAuthError(error))
+                    throw new AuthExpiredException();
+
+                throw new InvalidOperationException(error ?? "Could not load the playlist.");
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
+
+            List<VideoInfo> videos = new();
+
+            if (root.TryGetProperty("entries", out JsonElement entries) &&
+                entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement e in entries.EnumerateArray())
+                {
+                    if (e.ValueKind != JsonValueKind.Object)
+                        continue;
+
+                    string? vid = Str(e, "id");
+                    string title = Str(e, "title") ?? "";
+
+                    // Removed and private videos have no usable title.
+                    if (vid == null || vid.Length != 11 ||
+                        title.StartsWith("[Private", StringComparison.OrdinalIgnoreCase) ||
+                        title.StartsWith("[Deleted", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    int duration = e.TryGetProperty("duration", out JsonElement d) && d.ValueKind == JsonValueKind.Number
+                        ? (int)d.GetDouble()
+                        : 0;
+
+                    videos.Add(new VideoInfo(vid, title, Str(e, "channel") ?? Str(e, "uploader") ?? "", duration));
+                }
+            }
+
+            return new PlaylistData(
+                id,
+                Str(root, "title") ?? "Playlist",
+                Str(root, "channel") ?? Str(root, "uploader") ?? "",
+                videos);
         }
 
         if (YtAccount.SignedIn)
