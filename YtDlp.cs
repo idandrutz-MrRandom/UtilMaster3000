@@ -405,8 +405,8 @@ internal static class YtDlp
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (StreamPlan Plan, DateTime Expires)> PlanCache = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> Prefetching = new();
 
-    // Videos are prepared one at a time, to stay friendly to YouTube.
-    private static readonly SemaphoreSlim PrefetchGate = new(1, 1);
+    // Three videos are prepared at a time (and none while YouTube is pushing back).
+    private static readonly SemaphoreSlim PrefetchGate = new(3, 3);
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> PrefetchStarted = new();
 
     /// <summary>Resolves a video's stream ahead of time so it starts at once.</summary>
@@ -824,7 +824,8 @@ internal static class YtDlp
             "--concurrent-fragments", "2",
             "-f", BuildFormat(maxHeight),
             "--merge-output-format", "mp4",
-            "-o", Path.Combine(folder, "%(id)s.%(ext)s"),
+            "--windows-filenames", "--trim-filenames", "120",
+            "-o", Path.Combine(folder, "%(title)s [%(id)s].%(ext)s"),
             "--progress-template",
             "download:UT|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s"
         };
@@ -903,7 +904,9 @@ internal static class YtDlp
     {
         try
         {
+            // "Title [id].mp4" (and the older "id.mp4").
             return Directory.GetFiles(folder, videoId + ".*")
+                .Concat(Directory.GetFiles(folder, "* [" + videoId + "].*"))
                 .FirstOrDefault(f =>
                     f.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) &&
                     !f.Contains(".boost", StringComparison.OrdinalIgnoreCase));

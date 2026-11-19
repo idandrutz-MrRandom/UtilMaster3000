@@ -487,8 +487,11 @@ internal sealed class TubeLibrary
                 File.Delete(video.File);
 
             // Leftovers of an unfinished download.
-            foreach (string file in Directory.GetFiles(VideoFolder, video.Id + ".*"))
+            foreach (string file in Directory.GetFiles(VideoFolder, video.Id + ".*")
+                         .Concat(Directory.GetFiles(VideoFolder, "* [" + video.Id + "].*")))
+            {
                 File.Delete(file);
+            }
         }
         catch
         {

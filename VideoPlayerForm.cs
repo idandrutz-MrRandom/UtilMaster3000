@@ -158,6 +158,13 @@ internal sealed class VideoPlayerForm : Form
     // the position is "start offset + time since the restart".
     private bool bridged;
     private int streamRetries;
+
+    // Stall watchdog: if a streamed picture stops moving, reconnect.
+    private double watchPosition = -1;
+    private long watchSince;
+    private int stallRestarts;
+    private BridgeSpec? beforeUpgrade;
+    private long upgradedAt;
     private double bridgeOffset;
     private double bridgeDuration;
     private BridgeSpec? bridgeBase;
@@ -281,6 +288,7 @@ internal sealed class VideoPlayerForm : Form
 
     /// <summary>Tests: always convert streams instead of playing them directly.</summary>
     public static bool ForceBridge { get; set; }
+    public static bool NoUpgrade { get; set; }
 
     private VideoPlayerForm(List<TubeVideo> playlist, int index)
     {
@@ -546,6 +554,9 @@ internal sealed class VideoPlayerForm : Form
         duration = 0;
         bridged = false;
         streamRetries = 0;
+        stallRestarts = 0;
+        watchPosition = -1;
+        beforeUpgrade = null;
         bridgeBase = null;
         bridgeOffset = 0;
         fallback = null;
@@ -748,6 +759,9 @@ internal sealed class VideoPlayerForm : Form
 
         bool wasPlaying = playing;
 
+        DebugLog?.Invoke($"RestartBridge({seconds:0.0}) from: " + string.Join(" < ",
+            new System.Diagnostics.StackTrace().GetFrames().Skip(1).Take(4).Select(f => f.GetMethod()?.Name)));
+
         bridgeOffset = Math.Max(0, seconds);
         media.Source = new Uri(proxy.RegisterBridge(bridgeBase with { StartSeconds = bridgeOffset }));
         ApplySpeed();
@@ -774,7 +788,7 @@ internal sealed class VideoPlayerForm : Form
     {
         int wanted = YtDlp.UpgradeHeight;
 
-        if (wanted <= 0 || current.Height >= wanted || current.Progressive)
+        if (NoUpgrade || wanted <= 0 || current.Height >= wanted || current.Progressive)
             return;
 
         try
@@ -793,7 +807,7 @@ internal sealed class VideoPlayerForm : Form
             StreamPlan better = await YtDlp.PlanAsync(video.Id, null, wanted, CancellationToken.None);
 
             if (IsDisposed || index != target || !bridged || bridgeBase == null ||
-                better.Progressive || better.Height <= current.Height || better.Inputs.Count == 0)
+                better.Progressive || !better.CopyVideo || better.Height <= current.Height || better.Inputs.Count == 0)
             {
                 return;
             }
@@ -803,11 +817,15 @@ internal sealed class VideoPlayerForm : Form
             if (duration > 0 && at > duration - 20)
                 return;
 
+            beforeUpgrade = bridgeBase;
+            upgradedAt = Environment.TickCount64;
+
             bridgeBase = new BridgeSpec(
                 better.Inputs.Select(x => new BridgeInput(x.Url, x.Headers)).ToList(),
                 0,
                 better.CopyVideo);
 
+            DebugLog?.Invoke($"upgrade: {current.Height}p -> {better.Height}p at {at:0.0}s (copyVideo={better.CopyVideo})");
             RestartBridge(at);
             Say("Quality: " + better.Height + "p");
         }
@@ -1886,6 +1904,47 @@ internal sealed class VideoPlayerForm : Form
     // TICK
     // --------------------------------------------------
 
+    private void WatchForStall(double position)
+    {
+        if (!bridged || bridgeBase == null || !playing || seekTarget >= 0)
+        {
+            watchPosition = -1;
+            return;
+        }
+
+        long now = Environment.TickCount64;
+
+        if (watchPosition < 0 || position > watchPosition + 0.05 || position < watchPosition - 0.5)
+        {
+            watchPosition = position;
+            watchSince = now;
+            return;
+        }
+
+        if (now - watchSince < 7000 || position >= duration - 3 || stallRestarts >= 4)
+            return;
+
+        stallRestarts++;
+        watchSince = now;
+
+        // Just after a quality upgrade: the better stream is the suspect.
+        if (beforeUpgrade != null && now - upgradedAt < 25000)
+        {
+            bridgeBase = beforeUpgrade;
+            beforeUpgrade = null;
+            DebugLog?.Invoke($"stalled after upgrade at {position:0.0}s, going back");
+            Say("Back to the smoother quality");
+        }
+        else
+        {
+            DebugLog?.Invoke($"stalled at {position:0.0}s, reconnecting");
+            Say("Reconnecting...");
+        }
+
+        RestartBridge(position);
+        watchPosition = -1;
+    }
+
     private void OnTick()
     {
         // Show the controls again when the mouse moves in fullscreen.
@@ -1915,6 +1974,8 @@ internal sealed class VideoPlayerForm : Form
             return;
 
         double position = Pos;
+
+        WatchForStall(position);
 
         // Moved away from the end (seek, replay): the next end counts again.
         if (endedHandled && position < duration - 2.0)

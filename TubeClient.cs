@@ -1858,317 +1858,151 @@ internal sealed class TubeClient : Form
     // SETTINGS VIEW
     // --------------------------------------------------
 
-    private readonly ComboBox qualityBox = new();
-    private readonly NumericUpDown parallelBox = new();
-    private readonly NumericUpDown sizeBox = new();
-    private readonly NumericUpDown rateBox = new();
-    private readonly NumericUpDown refreshBox = new();
-    private readonly NumericUpDown recommendedBox = new();
-    private readonly NumericUpDown subscriptionBox = new();
-    private readonly NumericUpDown volumeBox = new();
-    private readonly NumericUpDown autoDeleteBox = new();
-    private readonly NumericUpDown unwatchedDaysBox = new();
-    private readonly NumericUpDown autoplayDelayBox = new();
-    private readonly CheckBox autoBox = new();
-    private readonly CheckBox historyBox = new();
-    private readonly CheckBox speedMemoryBox = new();
-    private readonly CheckBox autoplayBox = new();
-    private readonly CheckBox askOnlineBox = new();
+    private TubeSettingsList? settingsList;
     private readonly TextBox folderBox = new();
-    private readonly Label accountLabel = new();
-    private readonly Label toolsLabel = new();
-    private bool loadingSettings;
 
     private static readonly int[] Qualities = { 360, 480, 720, 1080 };
+
+    private string AccountShort() =>
+        !YtAccount.SignedIn ? "Not signed in"
+        : library.AuthExpired ? "Signed in, but the session ended"
+        : "Signed in with Google";
+
+    private static string ShortPath(string path) =>
+        path.Length <= 48 ? path : "..." + path[^45..];
 
     private void BuildSettingsView()
     {
         settingsView.Dock = DockStyle.Fill;
         settingsView.BackColor = Theme.Background;
-        settingsView.AutoScroll = true;
 
-        int y = 10;
+        TubeSettingsList list = settingsList = new TubeSettingsList { Dock = DockStyle.Fill };
+        settingsView.Controls.Add(list);
 
-        void Heading(string text)
-        {
-            settingsView.Controls.Add(new Label
+        void Toggle(string icon, string label, Func<bool> get, Action<bool> set, string tip) =>
+            list.AddRow(icon, () => $"{label}: {(get() ? "On" : "Off")}", tip, _ =>
             {
-                Text = text,
-                Location = new Point(24, y),
-                Size = new Size(500, 26),
-                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
-                ForeColor = Theme.Accent
+                set(!get());
+                library.SettingsChanged();
             });
 
-            y += 34;
-        }
-
-        void Caption(string text)
-        {
-            settingsView.Controls.Add(new Label
+        // Click = next value, right-click = the previous one.
+        void Cycle(string icon, string label, int[] presets, Func<int> get, Action<int> set,
+            Func<int, string> format, string tip) =>
+            list.AddRow(icon, () => $"{label}: {format(get())}", tip, reverse =>
             {
-                Text = text,
-                Location = new Point(24, y + 4),
-                Size = new Size(340, 22),
-                ForeColor = Theme.Text
+                int[] all = presets.Contains(get())
+                    ? presets
+                    : presets.Append(get()).OrderBy(x => x).ToArray();
+
+                int i = Array.IndexOf(all, get());
+                i = (i + (reverse ? -1 : 1) + all.Length) % all.Length;
+
+                set(all[i]);
+                library.SettingsChanged();
             });
-        }
 
-        void Place(Control control, int width)
-        {
-            control.Location = new Point(380, y);
-            control.Width = width;
-            control.BackColor = Theme.Search;
-            control.ForeColor = Theme.Strong;
-            settingsView.Controls.Add(control);
-            y += 38;
-        }
-
-        Button ActionButton(string text, int x, int width, Color back, Color fore, EventHandler? click)
-        {
-            Button b = new()
-            {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(width, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = back,
-                ForeColor = fore,
-                TabStop = false,
-                Cursor = Cursors.Hand
-            };
-
-            b.FlatAppearance.BorderSize = 0;
-
-            if (click != null)
-                b.Click += click;
-
-            settingsView.Controls.Add(b);
-            return b;
-        }
+        string Count(int v) => v.ToString();
+        string Off(int v, string unit) => v == 0 ? "Off" : v + " " + unit;
+        TubeSettings s = library.Settings;
 
         // ---- account ----
-        Heading("Account");
+        list.AddHeader("Account");
 
-        accountLabel.Location = new Point(24, y);
-        accountLabel.Size = new Size(860, 22);
-        accountLabel.ForeColor = Theme.Text;
-        settingsView.Controls.Add(accountLabel);
-        y += 30;
+        list.AddRow("", () => "Account: " + AccountShort(),
+            "Sign in to get your YouTube recommendations and to look videos up quickly." +
+            "\nThe session renews itself, so you stay signed in.", null);
+        list.AddRow("", () => "Sign in with Google", "Opens a sign-in window.", _ => SignIn());
+        list.AddRow("", () => "Sign out", "Forgets the saved sign-in on this computer.", _ => SignOut());
+        list.AddRow("", () => "Import cookies.txt...",
+            "An alternative to the sign-in window: use cookies exported from your browser.", _ => ImportCookies());
 
-        ActionButton("Sign in with Google", 24, 170, Theme.Accent, Theme.Background, (_, _) => SignIn());
-        ActionButton("Sign out", 202, 100, Theme.Search, Theme.Strong, (_, _) => SignOut());
-        ActionButton("Import cookies.txt...", 310, 170, Theme.Search, Theme.Strong, (_, _) => ImportCookies());
-        y += 48;
+        int[] saveCounts = { 0, 1, 2, 3, 5, 10, 20, 30 };
 
-        Caption("Save recommended videos offline (per refresh)");
-        recommendedBox.Minimum = 0;
-        recommendedBox.Maximum = 30;
-        Place(recommendedBox, 70);
-
-        Caption("Save subscription videos offline (per refresh)");
-        subscriptionBox.Minimum = 0;
-        subscriptionBox.Maximum = 30;
-        Place(subscriptionBox, 70);
-
-        y += 12;
+        Cycle("", "Save recommended videos (per refresh)", saveCounts,
+            () => library.Settings.RecommendedToSave, v => library.Settings.RecommendedToSave = v, Count,
+            "How many recommended videos are downloaded for offline viewing each time the feed refreshes.\n0 = none.");
+        Cycle("", "Save subscription videos (per refresh)", saveCounts,
+            () => library.Settings.SubscriptionsToSave, v => library.Settings.SubscriptionsToSave = v, Count,
+            "How many new videos from your subscriptions are downloaded each refresh.\n0 = none.");
 
         // ---- player ----
-        Heading("Player");
+        list.AddHeader("Player");
 
-        Caption("Keep a watch history");
-        historyBox.Text = "On";
-        historyBox.FlatStyle = FlatStyle.Flat;
-        Place(historyBox, 80);
-
-        Caption("Remember playback speed per channel");
-        speedMemoryBox.Text = "On";
-        speedMemoryBox.FlatStyle = FlatStyle.Flat;
-        Place(speedMemoryBox, 80);
-
-        Caption("Play the next video automatically");
-        autoplayBox.Text = "On";
-        autoplayBox.FlatStyle = FlatStyle.Flat;
-        Place(autoplayBox, 80);
-
-        Caption("Autoplay countdown (seconds, 0 = at once)");
-        autoplayDelayBox.Minimum = 0;
-        autoplayDelayBox.Maximum = 30;
-        Place(autoplayDelayBox, 70);
-
-        Caption("Starting volume (%)");
-        volumeBox.Minimum = 0;
-        volumeBox.Maximum = 100;
-        volumeBox.Increment = 5;
-        Place(volumeBox, 70);
-
-        y += 12;
+        Toggle("", "Keep a watch history", () => library.Settings.KeepHistory, v => library.Settings.KeepHistory = v,
+            "Remembers what you watched so it can show up in History.\nTurn off to stop recording.");
+        Toggle("", "Remember playback speed per channel", () => library.Settings.RememberChannelSpeed,
+            v => library.Settings.RememberChannelSpeed = v,
+            "If you speed up or slow down a channel's video, the next one from the same channel starts at that speed.");
+        Toggle("", "Play the next video automatically", () => library.Settings.Autoplay, v => library.Settings.Autoplay = v,
+            "When a video ends, the next one in the list starts by itself after the countdown.");
+        Cycle("", "Autoplay countdown", new[] { 0, 3, 5, 10, 15, 30 },
+            () => library.Settings.AutoplayDelay, v => library.Settings.AutoplayDelay = v,
+            v => v == 0 ? "at once" : v + " s",
+            "How long the end screen waits before the next video starts.\nClick to step through, right-click to go back.");
+        Cycle("", "Starting volume", new[] { 0, 25, 50, 75, 100 },
+            () => library.Settings.DefaultVolume, v => library.Settings.DefaultVolume = v, v => v + "%",
+            "The volume each video starts at.");
 
         // ---- downloads ----
-        Heading("Downloads");
+        list.AddHeader("Videos and downloads");
 
-        Caption("Video quality (up to)");
-        qualityBox.DropDownStyle = ComboBoxStyle.DropDownList;
-        qualityBox.FlatStyle = FlatStyle.Flat;
-        qualityBox.Items.AddRange(new object[] { "360p", "480p", "720p", "1080p  (sharpest)" });
-        Place(qualityBox, 180);
+        Cycle("", "Video quality (starts at 720p, then climbs)", Qualities,
+            () => library.Settings.Quality, v => library.Settings.Quality = v, v => v + "p",
+            "Streamed videos start at 720p and climb to 1080p while playing.\nDownloads use this quality. Lower it on a slow connection.");
+        Cycle("", "Downloads at the same time", new[] { 1, 2, 3 },
+            () => library.Settings.Parallel, v => library.Settings.Parallel = v, Count,
+            "More at once is faster but uses more memory and bandwidth.");
+        Cycle("", "Library size limit", new[] { 10, 25, 50, 100, 250, 500, 1000, 2000 },
+            () => library.Settings.MaxGb, v => library.Settings.MaxGb = v, v => v + " GB",
+            "When saved videos take more room than this, the oldest watched ones are deleted.");
+        Cycle("", "Delete watched videos after", new[] { 0, 1, 6, 12, 24, 48, 168, 720 },
+            () => library.Settings.AutoDeleteHours, v => library.Settings.AutoDeleteHours = v,
+            v => v == 0 ? "never" : v < 48 ? v + " h" : v / 24 + " days",
+            "Watched videos are removed from your disk after this long.");
+        Cycle("", "Delete saved videos nobody opened after", new[] { 0, 7, 14, 30, 60, 90, 180, 365 },
+            () => library.Settings.UnwatchedDeleteDays, v => library.Settings.UnwatchedDeleteDays = v,
+            v => v == 0 ? "never" : v + " days",
+            "Saved videos you never opened are removed after this long.");
+        Cycle("", "Download speed limit", new[] { 0, 500, 1000, 2500, 5000, 10000 },
+            () => library.Settings.RateKb, v => library.Settings.RateKb = v,
+            v => v == 0 ? "none" : v >= 1000 ? v / 1000.0 + " MB/s" : v + " KB/s",
+            "Caps how fast downloads use your connection, so other things stay fast.");
+        Cycle("", "Check sources and feeds every", new[] { 15, 30, 60, 120, 240, 720, 1440 },
+            () => library.Settings.RefreshMinutes, v => library.Settings.RefreshMinutes = v,
+            v => v < 60 ? v + " min" : v / 60 + " h",
+            "How often subscriptions and recommendations look for new videos.");
+        Toggle("", "Offer to watch online when downloads are busy", () => library.Settings.AskOnlineWhenBusy,
+            v => library.Settings.AskOnlineWhenBusy = v,
+            "If a video is still waiting to download, ask whether to watch it online right now instead.");
+        Toggle("", "Save new videos automatically", () => library.Settings.AutoDownload,
+            v => library.Settings.AutoDownload = v,
+            "New videos from your sources are downloaded without asking.");
 
-        Caption("Downloads at the same time");
-        parallelBox.Minimum = 1;
-        parallelBox.Maximum = 3;
-        Place(parallelBox, 70);
-
-        Caption("Library size limit (GB)");
-        sizeBox.Minimum = 1;
-        sizeBox.Maximum = 5000;
-        Place(sizeBox, 90);
-
-        Caption("Delete watched videos after (hours, 0 = never)");
-        autoDeleteBox.Minimum = 0;
-        autoDeleteBox.Maximum = 720;
-        Place(autoDeleteBox, 70);
-
-        Caption("Delete saved videos nobody opened after (days, 0 = never)");
-        unwatchedDaysBox.Minimum = 0;
-        unwatchedDaysBox.Maximum = 3650;
-        Place(unwatchedDaysBox, 70);
-
-        Caption("Download speed limit (KB/s, 0 = none)");
-        rateBox.Minimum = 0;
-        rateBox.Maximum = 1_000_000;
-        rateBox.Increment = 500;
-        Place(rateBox, 110);
-
-        Caption("Check sources / feeds every (minutes)");
-        refreshBox.Minimum = 15;
-        refreshBox.Maximum = 1440;
-        refreshBox.Increment = 15;
-        Place(refreshBox, 90);
-
-        Caption("Offer to watch online when downloads are busy");
-        askOnlineBox.Text = "On";
-        askOnlineBox.FlatStyle = FlatStyle.Flat;
-        Place(askOnlineBox, 80);
-
-        Caption("Save new videos automatically");
-        autoBox.Text = "On";
-        autoBox.FlatStyle = FlatStyle.Flat;
-        Place(autoBox, 80);
-
-        Caption("Download folder");
-        folderBox.ReadOnly = true;
-        Place(folderBox, 360);
-
-        Button browse = new()
-        {
-            Text = "Browse...",
-            Location = new Point(752, folderBox.Top - 2),
-            Size = new Size(90, 28),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Search,
-            ForeColor = Theme.Strong,
-            TabStop = false
-        };
-
-        browse.FlatAppearance.BorderSize = 0;
-        browse.Click += (_, _) => BrowseFolder();
-        settingsView.Controls.Add(browse);
-
-        y += 10;
-
-        Button update = ActionButton("Update yt-dlp", 24, 140, Theme.Accent, Theme.Background, null);
-        update.Click += async (_, _) => await UpdateTool(update);
-
-        ActionButton("Open download folder", 176, 170, Theme.Search, Theme.Strong, (_, _) =>
+        list.AddRow("", () => "Download folder: " + ShortPath(library.VideoFolder),
+            library.VideoFolder + "\nClick to choose another folder. Videos already saved stay where they are.",
+            _ => BrowseFolder());
+        list.AddRow("", () => "Open the download folder", "Opens it in Explorer.", _ =>
         {
             Directory.CreateDirectory(library.VideoFolder);
             Process.Start("explorer.exe", library.VideoFolder);
         });
 
-        y += 50;
+        // ---- tools ----
+        list.AddHeader("Tools");
 
-        toolsLabel.Location = new Point(24, y);
-        toolsLabel.Size = new Size(860, 90);
-        toolsLabel.ForeColor = Theme.Text;
-        settingsView.Controls.Add(toolsLabel);
+        list.AddRow("", () => "Update yt-dlp",
+            "yt-dlp: " + (YtDlp.Find() ?? "not installed") + "\nffmpeg: " + (FfmpegRecorder.FindFfmpeg() ?? "not found") +
+            "\nClick to update yt-dlp (it looks videos up).",
+            reverse => { _ = UpdateTool(new Button()); });
 
-        foreach (NumericUpDown n in new[] { parallelBox, sizeBox, rateBox, refreshBox, recommendedBox, subscriptionBox, volumeBox, autoDeleteBox, unwatchedDaysBox, autoplayDelayBox })
-            n.ValueChanged += (_, _) => SaveSettingsControls();
-
-        foreach (CheckBox c in new[] { autoBox, historyBox, speedMemoryBox, autoplayBox, askOnlineBox })
-            c.CheckedChanged += (_, _) => SaveSettingsControls();
-
-        qualityBox.SelectedIndexChanged += (_, _) => SaveSettingsControls();
+        _ = s;
     }
 
     private void LoadSettingsControls()
     {
-        loadingSettings = true;
-
-        TubeSettings s = library.Settings;
-
-        int q = Array.IndexOf(Qualities, s.Quality);
-
-        qualityBox.SelectedIndex = q >= 0 ? q : 2;
-        parallelBox.Value = Math.Clamp(s.Parallel, 1, 3);
-        sizeBox.Value = Math.Clamp(s.MaxGb, 1, 5000);
-        rateBox.Value = Math.Clamp(s.RateKb, 0, 1_000_000);
-        refreshBox.Value = Math.Clamp(s.RefreshMinutes, 15, 1440);
-        recommendedBox.Value = Math.Clamp(s.RecommendedToSave, 0, 30);
-        subscriptionBox.Value = Math.Clamp(s.SubscriptionsToSave, 0, 30);
-        volumeBox.Value = Math.Clamp(s.DefaultVolume, 0, 100);
-        autoDeleteBox.Value = Math.Clamp(s.AutoDeleteHours, 0, 720);
-        unwatchedDaysBox.Value = Math.Clamp(s.UnwatchedDeleteDays, 0, 3650);
-        autoplayDelayBox.Value = Math.Clamp(s.AutoplayDelay, 0, 30);
-        autoBox.Checked = s.AutoDownload;
-        askOnlineBox.Checked = s.AskOnlineWhenBusy;
-        historyBox.Checked = s.KeepHistory;
-        speedMemoryBox.Checked = s.RememberChannelSpeed;
-        autoplayBox.Checked = s.Autoplay;
         folderBox.Text = library.VideoFolder;
-
-        loadingSettings = false;
-
-        accountLabel.Text = YtAccount.SignedIn
-            ? (library.AuthExpired
-                ? "Signed in, but Google ended the session. Sign in again."
-                : "Signed in with Google. The session renews itself, so you stay signed in.")
-            : "Not signed in. Sign in to get your YouTube recommendations.";
-
-        string ytdlp = YtDlp.Find() ?? "not installed";
-        string ffmpeg = FfmpegRecorder.FindFfmpeg() ?? "not found";
-
-        toolsLabel.Text =
-            $"yt-dlp:  {ytdlp}\n" +
-            $"ffmpeg:  {ffmpeg}\n" +
-            "More simultaneous downloads is faster but uses more memory and bandwidth.";
-    }
-
-    private void SaveSettingsControls()
-    {
-        if (loadingSettings)
-            return;
-
-        TubeSettings s = library.Settings;
-
-        s.Quality = Qualities[Math.Max(0, qualityBox.SelectedIndex)];
-        s.Parallel = (int)parallelBox.Value;
-        s.MaxGb = (int)sizeBox.Value;
-        s.RateKb = (int)rateBox.Value;
-        s.RefreshMinutes = (int)refreshBox.Value;
-        s.RecommendedToSave = (int)recommendedBox.Value;
-        s.SubscriptionsToSave = (int)subscriptionBox.Value;
-        s.DefaultVolume = (int)volumeBox.Value;
-        s.AutoDeleteHours = (int)autoDeleteBox.Value;
-        s.UnwatchedDeleteDays = (int)unwatchedDaysBox.Value;
-        s.AutoplayDelay = (int)autoplayDelayBox.Value;
-        s.AutoDownload = autoBox.Checked;
-        s.AskOnlineWhenBusy = askOnlineBox.Checked;
-        s.KeepHistory = historyBox.Checked;
-        s.RememberChannelSpeed = speedMemoryBox.Checked;
-        s.Autoplay = autoplayBox.Checked;
-
-        library.SettingsChanged();
+        settingsList?.RefreshTexts();
     }
 
     private void ImportCookies()
@@ -2603,7 +2437,7 @@ internal sealed class VideoGrid : Control
         // so clicking one starts playing almost at once.
         int quality = YtDlp.StartHeight;
 
-        foreach (TubeVideo v in list.Take(6))
+        foreach (TubeVideo v in list.Take(20))
         {
             if (v.File == null)
                 YtDlp.Prefetch(v.Id, quality);
