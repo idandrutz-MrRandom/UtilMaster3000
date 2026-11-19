@@ -34,6 +34,17 @@ internal sealed class AppSettings
         NotificationPosition.BottomCenter;
     public bool ShowNotification { get; set; } = true;
 
+    // Notification customization
+    public bool ShowMessages { get; set; } = true;            // the small "Copied..." style toasts
+    public int NotificationHoldMs { get; set; } = 900;        // how long a toast stays
+    public int NotificationScale { get; set; } = 100;         // size, percent
+
+    // The "what is running" banner
+    public bool ShowRunningBanner { get; set; } = true;
+    public NotificationPosition BannerPosition { get; set; } = NotificationPosition.TopCenter;
+    public int BannerScale { get; set; } = 100;
+    public int BannerOpacityPercent { get; set; } = 94;
+
     public bool HideOnFocusLoss { get; set; }
 
     /// <summary>Menus slide out beside the launcher when you rest the mouse on them.</summary>

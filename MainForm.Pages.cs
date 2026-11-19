@@ -1257,6 +1257,7 @@ public sealed partial class MainForm
             "Calc" => CalcPage(query),
             "Auto" => AutoClickPage(query),
             "Macros" => MacrosPage(query),
+            "Notifications" => NotificationsPage(query),
             "MacroEntry" => MacroEntryPage(query),
             "MacroStep" => MacroStepPage(query),
             "Vault" => VaultPage(query),

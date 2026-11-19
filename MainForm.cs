@@ -169,6 +169,7 @@ public sealed partial class MainForm : Form
         trackTimer.Tick += (_, _) => TrackForeground();
         trackTimer.Start();
         SetupFlyouts();
+        SetupOverlay();
 
         StartupManager.MigrateLegacy();
 
@@ -407,6 +408,9 @@ public sealed partial class MainForm : Form
         notification.OpacitySetting = settings.NotificationOpacity;
         notification.Position = settings.NotificationPosition;
         notification.Muted = !settings.ShowNotification;
+        notification.MessagesEnabled = settings.ShowMessages;
+        notification.HoldMs = Math.Clamp(settings.NotificationHoldMs, 300, 30000);
+        notification.ScalePercent = Math.Clamp(settings.NotificationScale, 50, 300);
     }
 
     private void SaveSettings()
@@ -443,6 +447,7 @@ public sealed partial class MainForm : Form
     private string ParentPage() =>
         currentPage == "VaultEntry" ? "Vault" :
         currentPage == "TextTool" ? "Text" :
+        currentPage == "Notifications" ? "Style" :
         currentPage == "MacroEntry" ? "Macros" :
         currentPage == "MacroStep" ? "MacroEntry" : "home";
 

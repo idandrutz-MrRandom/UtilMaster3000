@@ -174,32 +174,7 @@ public sealed partial class MainForm
             ApplyAppearance(reloadBackground: false);
         }));
 
-        list.Add(Act("", $"Notification opacity: {notification.OpacitySetting:P0}", () =>
-        {
-            notification.CycleOpacity();
-            SaveSettings();
-            notification.Preview(translator.Enabled);
-            RefreshPage();
-        }));
-
-        list.Add(Act("", $"Notification position: {Pretty(notification.Position)}", () =>
-        {
-            notification.CyclePosition();
-            SaveSettings();
-            notification.Preview(translator.Enabled);
-            RefreshPage();
-        }));
-
-        list.Add(Act("", $"Notification: {OnOff(!notification.Muted)}", () =>
-        {
-            notification.Muted = !notification.Muted;
-            SaveSettings();
-
-            if (!notification.Muted)
-                notification.Preview(translator.Enabled);
-
-            RefreshPage();
-        }));
+        list.Add(new MenuEntry(0, "\uE7E7", "Notifications...", targetPage: "Notifications"));
 
         list.Add(Act("", "Reset appearance", ResetAppearance));
         list.Add(BackEntry());

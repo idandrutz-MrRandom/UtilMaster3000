@@ -546,6 +546,15 @@ internal sealed class ModeNotification : Form
 
     public bool Muted { get; set; }
 
+    /// <summary>The small utility toasts ("Copied...") can be switched off on their own.</summary>
+    public bool MessagesEnabled { get; set; } = true;
+
+    /// <summary>How long a toast stays, in milliseconds.</summary>
+    public int HoldMs { get; set; } = 900;
+
+    /// <summary>Size of the toast, percent (100 = normal).</summary>
+    public int ScalePercent { get; set; } = 100;
+
     private const int HoldDurationTicks = 30;
 
     public ModeNotification()
@@ -634,6 +643,9 @@ internal sealed class ModeNotification : Form
     /// <summary>Generic toast used by the utilities (always shown).</summary>
     public void ShowMessage(string text, Color? dot = null)
     {
+        if (!MessagesEnabled)
+            return;
+
         DisplayCore(text, dot ?? Accent);
     }
 
@@ -645,12 +657,29 @@ internal sealed class ModeNotification : Form
         modeText.Text = text;
         modeText.AutoEllipsis = true;
 
+        // Size follows the setting (80% .. 200%).
+        double scale = Math.Clamp(ScalePercent, 50, 300) / 100.0;
+
+        if (Math.Abs(modeText.Font.Size - 9f * scale) > 0.2)
+        {
+            Font oldText = modeText.Font, oldDot = indicator.Font;
+            modeText.Font = new Font("Consolas", (float)(9f * scale));
+            indicator.Font = new Font("Consolas", (float)(10f * scale));
+            oldText.Dispose();
+            oldDot.Dispose();
+        }
+
+        int heightPx = (int)Math.Round(42 * scale);
+        indicator.Location = new Point((int)(10 * scale), (heightPx - (int)(26 * scale)) / 2);
+        indicator.Size = new Size((int)(14 * scale) + 2, (int)(26 * scale));
+        modeText.Location = new Point((int)(28 * scale), (heightPx - (int)(26 * scale)) / 2);
+
         // Grow to fit longer messages.
         int textWidth = TextRenderer.MeasureText(text, modeText.Font).Width;
-        int width = Math.Clamp(textWidth + 50, 190, 520);
+        int width = Math.Clamp(textWidth + (int)(50 * scale), (int)(190 * scale), (int)(520 * scale));
 
-        ClientSize = new Size(width, 42);
-        modeText.Size = new Size(width - 38, 26);
+        ClientSize = new Size(width, heightPx);
+        modeText.Size = new Size(width - (int)(38 * scale), (int)(26 * scale));
 
         // Fade in when freshly shown; just refresh if already visible.
         fadingIn = !Visible;
@@ -683,7 +712,7 @@ internal sealed class ModeNotification : Form
 
         Location = new Point(x, y);
 
-        holdTicks = HoldDurationTicks;
+        holdTicks = Math.Max(1, HoldMs / animationTimer.Interval);
 
         animationTimer.Stop();
 
