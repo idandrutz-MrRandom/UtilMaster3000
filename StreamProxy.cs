@@ -365,6 +365,8 @@ internal sealed class StreamProxy : IDisposable
                 using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(token);
                 limit.CancelAfter(RequestLimitMs);
 
+                System.Diagnostics.Stopwatch attemptClock = System.Diagnostics.Stopwatch.StartNew();
+
                 using HttpResponseMessage response = await client.SendAsync(
                     request, HttpCompletionOption.ResponseHeadersRead, limit.Token);
 
@@ -388,6 +390,10 @@ internal sealed class StreamProxy : IDisposable
                 }
 
                 byte[] data = collected.ToArray();
+
+                // Speed of this successful request (retries and waits excluded).
+                if (data.Length >= 1_500_000)
+                    NoteSpeed(data.Length, attemptClock.Elapsed.TotalSeconds);
                 Trace?.Invoke($"chunk {from / 1024}K+{data.Length / 1024}K ({MimeFromUrl(target.Url)})");
                 return data;
             }
@@ -492,6 +498,47 @@ internal sealed class StreamProxy : IDisposable
 
     // How much converted video may wait in memory for the player (a few minutes).
     internal static long ReadAheadBytes = 150L * 1024 * 1024;
+
+    // ---- how fast is YouTube answering on this connection? (megabits per second) ----
+
+    private static double recentMbps;
+    private static readonly object SpeedLock = new();
+
+    /// <summary>0 until a few downloads have been timed.</summary>
+    public static double RecentMbps
+    {
+        get
+        {
+            lock (SpeedLock)
+                return recentMbps;
+        }
+        internal set
+        {
+            lock (SpeedLock)
+                recentMbps = value;
+        }
+    }
+
+    internal static void NoteSpeed(long bytes, double seconds)
+    {
+        if (seconds <= 0.02)
+            return;
+
+        double mbps = bytes * 8 / 1_000_000.0 / seconds;
+
+        lock (SpeedLock)
+            recentMbps = recentMbps <= 0 ? mbps : recentMbps * 0.6 + mbps * 0.4;
+    }
+
+    /// <summary>A picture stalled: the connection is not as good as it looked.</summary>
+    internal static void NoteStall()
+    {
+        lock (SpeedLock)
+        {
+            if (recentMbps > 6)
+                recentMbps = 6;
+        }
+    }
 
     // No answer (or no data) for this long: ask again.
     private const int RequestLimitMs = 9000;

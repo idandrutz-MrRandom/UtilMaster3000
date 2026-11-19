@@ -514,7 +514,29 @@ internal static class YtDlp
     // Streams play at the quality you chose, from the first second.
     // (Switching to a better stream in the middle of a video froze the
     // picture in every real test, so there is no mid-play switch.)
-    public static int StartHeight => TubeLibrary.Instance.Settings.Quality;
+    public static int StartHeight
+    {
+        get
+        {
+            TubeSettings s = TubeLibrary.Instance.Settings;
+
+            if (!s.AutoStreamQuality)
+                return s.Quality;
+
+            // Chosen before the video starts, from how fast YouTube has been
+            // answering: sharper when the connection is fast, gentler when it
+            // is not. (Nothing is shown; there is no switch mid-video.)
+            double mbps = StreamProxy.RecentMbps;
+
+            if (mbps >= 14)
+                return Math.Max(s.Quality, 1080);
+
+            if (mbps > 0 && mbps < 8)
+                return Math.Min(s.Quality, 720);
+
+            return s.Quality;
+        }
+    }
 
     public static int UpgradeHeight => 0;
 
@@ -1026,6 +1048,61 @@ internal static class YtDlp
         return Regex.IsMatch(t, @"^(PL|UU|OL|LL|FL|RD)[A-Za-z0-9_-]{10,}$") || t is "WL" or "LL"
             ? t
             : null;
+    }
+
+    /// <summary>
+    /// The playlists of the signed-in account: the ones you made, Liked videos,
+    /// Watch later and so on.
+    /// </summary>
+    public static async Task<List<SavedPlaylist>> MyPlaylistsAsync(CancellationToken ct)
+    {
+        if (!YtAccount.SignedIn)
+            throw new AuthExpiredException();
+
+        return await YtAccount.WithCookieFile(async file =>
+        {
+            ProcResult r = await RunAsync(new[]
+            {
+                "--flat-playlist", "--dump-json", "--no-warnings", "--ignore-errors",
+                "--cookies", file, "https://www.youtube.com/feed/playlists"
+            }, ct);
+
+            List<SavedPlaylist> found = new();
+
+            foreach (string line in r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line);
+                    JsonElement e = doc.RootElement;
+
+                    string? id = Str(e, "id");
+                    string? title = Str(e, "title");
+
+                    if (id != null && title != null && !found.Any(p => p.Id == id))
+                        found.Add(new SavedPlaylist { Id = id, Title = title });
+                }
+                catch
+                {
+                    // A line that is not a playlist.
+                }
+            }
+
+            if (found.Count == 0 && r.ExitCode != 0)
+            {
+                string? error = LastError(r.Stderr);
+
+                if (error != null && LooksLikeAuthError(error))
+                    throw new AuthExpiredException();
+
+                throw new InvalidOperationException(error ?? "Could not load your playlists.");
+            }
+
+            // Your own first, the YouTube ones (Liked, Watch later...) after them.
+            return found
+                .OrderBy(p => p.Id.Length <= 3 ? 1 : 0)
+                .ToList();
+        });
     }
 
     /// <summary>Loads a playlist (title + videos). Private ones need your account.</summary>

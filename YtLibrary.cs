@@ -104,6 +104,9 @@ internal sealed class TubeSettings
     /// <summary>How solid the player's control bar is (percent; lower = more see-through).</summary>
     public int PlayerBarOpacity { get; set; } = 55;
 
+    /// <summary>Streams start sharper (1080p) when the connection is fast, gentler when it is not.</summary>
+    public bool AutoStreamQuality { get; set; } = true;
+
     /// <summary>The recommendations panel beside the video (when the window is wide enough).</summary>
     public bool PlayerSidebar { get; set; } = true;
 
@@ -169,6 +172,10 @@ internal sealed class SavedPlaylist
 internal sealed class TubeData
 {
     public List<SavedPlaylist> Playlists { get; set; } = new();
+
+    // The playlists on your account, so the page opens with them at once.
+    public List<SavedPlaylist> MyPlaylists { get; set; } = new();
+    public DateTime? MyPlaylistsUpdated { get; set; }
     public List<TubeVideo> Videos { get; set; } = new();
     public List<TubeSource> Sources { get; set; } = new();
     public TubeSettings Settings { get; set; } = new();
@@ -375,6 +382,28 @@ internal sealed class TubeLibrary
                 foreach (SavedPlaylist old in data.Playlists.OrderBy(p => p.Loaded).Take(data.Playlists.Count - 40).ToList())
                     data.Playlists.Remove(old);
             }
+        }
+
+        Changed();
+    }
+
+    public List<SavedPlaylist> MyPlaylists()
+    {
+        lock (gate)
+            return data.MyPlaylists.ToList();
+    }
+
+    public DateTime? MyPlaylistsUpdated
+    {
+        get { lock (gate) return data.MyPlaylistsUpdated; }
+    }
+
+    public void SetMyPlaylists(List<SavedPlaylist> list)
+    {
+        lock (gate)
+        {
+            data.MyPlaylists = list;
+            data.MyPlaylistsUpdated = DateTime.Now;
         }
 
         Changed();

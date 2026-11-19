@@ -650,7 +650,10 @@ internal sealed class TubeClient : Form
         playlistBar.Visible = target == View.Playlists;
 
         if (target == View.Playlists)
+        {
             RefreshPlaylistRecent();
+            _ = LoadMyPlaylistsAsync(force: false);
+        }
 
         grid.Visible = videos;
         sourcesView.Visible = target == View.Sources;
@@ -898,7 +901,7 @@ internal sealed class TubeClient : Form
             }
 
             case View.Playlists:
-                empty.Text = "Paste a playlist link above and press Load\n(or pick one of the playlists you loaded before).\n\n" +
+                empty.Text = "Pick one of your own playlists above, or paste a playlist link and press Load.\n\n" +
                              "Then play all of it, shuffle it, or save it for offline viewing.";
                 break;
 
@@ -1724,16 +1727,20 @@ internal sealed class TubeClient : Form
     private readonly ComboBox playlistRecent = new();
     private List<VideoInfo> playlistResults = new();
     private string playlistTitle = "";
+    private string playlistId = "";
     private CancellationTokenSource? playlistCts;
     private bool fillingRecent;
+
+    private readonly ComboBox playlistMine = new();
 
     private void BuildPlaylistBar()
     {
         playlistBar.Dock = DockStyle.Top;
-        playlistBar.Height = 50;
+        playlistBar.Height = 94;
         playlistBar.BackColor = Theme.Background;
         playlistBar.Visible = false;
 
+        // ---- row 1: a link, and what to do with the playlist ----
         playlistBox.Location = new Point(22, 12);
         playlistBox.Size = new Size(330, 26);
         playlistBox.BackColor = Theme.Search;
@@ -1752,13 +1759,14 @@ internal sealed class TubeClient : Form
         playlistBar.Controls.Add(playlistBox);
 
         int x = 360;
+        int y = 9;
 
         Button Add(string text, int width, Action action)
         {
             Button b = new()
             {
                 Text = text,
-                Location = new Point(x, 9),
+                Location = new Point(x, y),
                 Size = new Size(width, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Theme.Search,
@@ -1787,24 +1795,155 @@ internal sealed class TubeClient : Form
             }
         });
 
-        playlistRecent.DropDownStyle = ComboBoxStyle.DropDownList;
-        playlistRecent.FlatStyle = FlatStyle.Flat;
-        playlistRecent.BackColor = Theme.Search;
-        playlistRecent.ForeColor = Theme.Strong;
-        playlistRecent.Location = new Point(x, 12);
-        playlistRecent.Width = 230;
+        x += 20;
+        Add("Play all", 78, PlayPlaylist);
+        Add("Shuffle", 74, () => PlayPlaylist(shuffle: true));
+        Add("Save all", 78, SavePlaylistOffline);
+
+        // ---- row 2: your account's playlists, and the ones you loaded before ----
+        Label Caption(string text, int left)
+        {
+            Label label = new()
+            {
+                Text = text,
+                Location = new Point(left, 55),
+                AutoSize = true,
+                ForeColor = Theme.Text,
+                BackColor = Theme.Background
+            };
+
+            playlistBar.Controls.Add(label);
+            return label;
+        }
+
+        void Style(ComboBox box, int left, int width)
+        {
+            box.DropDownStyle = ComboBoxStyle.DropDownList;
+            box.FlatStyle = FlatStyle.Flat;
+            box.BackColor = Theme.Search;
+            box.ForeColor = Theme.Strong;
+            box.Location = new Point(left, 52);
+            box.Width = width;
+            box.DisplayMember = nameof(SavedPlaylist.Title);
+            playlistBar.Controls.Add(box);
+        }
+
+        Caption("Your playlists:", 22);
+        Style(playlistMine, 128, 280);
+        playlistMine.SelectionChangeCommitted += (_, _) =>
+        {
+            if (fillingRecent || playlistMine.SelectedItem is not SavedPlaylist p)
+                return;
+
+            if (p.Id.Length == 0)
+                SignIn();
+            else
+                _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
+        };
+
+        Button refresh = new()
+        {
+            Text = "Refresh",
+            Location = new Point(416, 49),
+            Size = new Size(74, 30),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Search,
+            ForeColor = Theme.Strong,
+            Cursor = Cursors.Hand,
+            TabStop = false
+        };
+        refresh.FlatAppearance.BorderSize = 0;
+        refresh.Click += (_, _) => _ = LoadMyPlaylistsAsync(force: true);
+        playlistBar.Controls.Add(refresh);
+
+        Caption("Loaded before:", 520);
+        Style(playlistRecent, 624, 260);
         playlistRecent.SelectionChangeCommitted += (_, _) =>
         {
             if (!fillingRecent && playlistRecent.SelectedItem is SavedPlaylist p)
                 _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
         };
+    }
 
-        playlistBar.Controls.Add(playlistRecent);
-        x += 238;
+    private void RefreshMyPlaylistsUi()
+    {
+        fillingRecent = true;
 
-        Add("Play all", 78, PlayPlaylist);
-        Add("Shuffle", 74, () => PlayPlaylist(shuffle: true));
-        Add("Save all", 78, SavePlaylistOffline);
+        try
+        {
+            playlistMine.Items.Clear();
+
+            if (!YtAccount.SignedIn)
+            {
+                playlistMine.Items.Add(new SavedPlaylist { Id = "", Title = "Sign in to see your playlists..." });
+                playlistMine.SelectedIndex = 0;
+                return;
+            }
+
+            List<SavedPlaylist> mine = library.MyPlaylists();
+
+            foreach (SavedPlaylist p in mine)
+                playlistMine.Items.Add(p);
+
+            if (mine.Count == 0)
+            {
+                playlistMine.Items.Add(new SavedPlaylist { Id = "", Title = "Loading your playlists..." });
+                playlistMine.SelectedIndex = 0;
+            }
+            else
+            {
+                int current = mine.FindIndex(p => p.Id == playlistId);
+                playlistMine.SelectedIndex = current;
+            }
+        }
+        finally
+        {
+            fillingRecent = false;
+        }
+    }
+
+    private async Task LoadMyPlaylistsAsync(bool force)
+    {
+        RefreshMyPlaylistsUi();
+
+        if (!YtAccount.SignedIn)
+            return;
+
+        // Opening the page is enough while the list is fresh.
+        if (!force && library.MyPlaylists().Count > 0 &&
+            library.MyPlaylistsUpdated != null &&
+            DateTime.Now - library.MyPlaylistsUpdated.Value < TimeSpan.FromHours(1))
+        {
+            return;
+        }
+
+        try
+        {
+            List<SavedPlaylist> mine = await YtDlp.MyPlaylistsAsync(CancellationToken.None);
+
+            if (mine.Count > 0)
+            {
+                library.SetMyPlaylists(mine);
+
+                if (force)
+                    SetMessage($"{mine.Count} playlists on your account", 8);
+            }
+            else if (force)
+            {
+                SetMessage("No playlists found on your account.", 8);
+            }
+        }
+        catch (AuthExpiredException)
+        {
+            SetMessage("Google ended your session: sign in again to see your playlists.", 12);
+        }
+        catch (Exception ex)
+        {
+            if (force)
+                SetMessage("Could not load your playlists: " + ex.Message, 12);
+        }
+
+        RefreshMyPlaylistsUi();
     }
 
     private void RefreshPlaylistRecent()
@@ -1822,7 +1961,7 @@ internal sealed class TubeClient : Form
                 playlistRecent.Items.Add(p);
 
             // Show the one on screen, or a hint when there are none yet.
-            int current = saved.FindIndex(p => p.Title == playlistTitle);
+            int current = saved.FindIndex(p => p.Id == playlistId);
 
             if (current >= 0)
                 playlistRecent.SelectedIndex = current;
@@ -1875,6 +2014,7 @@ internal sealed class TubeClient : Form
 
             playlistResults = data.Videos;
             playlistTitle = data.Title;
+            playlistId = data.Id;
             playlistBox.Text = "";
 
             library.RememberPlaylist(data.Id, data.Title, data.Videos.Count);
@@ -2235,6 +2375,13 @@ internal sealed class TubeClient : Form
         Cycle("", "Video quality", Qualities,
             () => library.Settings.Quality, v => library.Settings.Quality = v, v => v + "p",
             "Streamed videos and downloads use this quality from the start.\nLower it on a slow connection; 1080p looks sharpest.");
+        list.AddRow("\uE8B2", () => "Better quality when the connection is fast: " + (library.Settings.AutoStreamQuality ? "On" : "Off"),
+            "Streams start at 1080p when YouTube has been answering quickly, and stay gentler after a stall. It never switches in the middle of a video.\nOff = always the quality chosen above.",
+            reverse =>
+            {
+                library.Settings.AutoStreamQuality = !library.Settings.AutoStreamQuality;
+                library.SettingsChanged();
+            });
         Cycle("", "Downloads at the same time", new[] { 1, 2, 3 },
             () => library.Settings.Parallel, v => library.Settings.Parallel = v, Count,
             "More at once is faster but uses more memory and bandwidth.");

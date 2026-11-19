@@ -1303,7 +1303,6 @@ internal sealed class VideoPlayerForm : Form
             else
                 media.Pause();
 
-            Say("Quality: " + better.Height + "p");
         }
         catch
         {
@@ -2879,6 +2878,7 @@ internal sealed class VideoPlayerForm : Form
 
         stallRestarts++;
         watchSince = now;
+        StreamProxy.NoteStall();
 
         // Just after a quality upgrade: the better stream is the suspect.
         if (beforeUpgrade != null && now - upgradedAt < 25000)
