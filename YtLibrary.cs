@@ -1153,7 +1153,8 @@ internal sealed class TubeLibrary
         {
             TubeVideo? video = null;
 
-            if (index < Settings.Parallel && !Paused && YtDlp.IsInstalled)
+            // A video loading for playback comes first: saving waits until it has what it needs.
+            if (index < Settings.Parallel && !Paused && YtDlp.IsInstalled && !StreamProxy.StreamIsLoading)
                 video = TakeNext();
 
             if (video == null)

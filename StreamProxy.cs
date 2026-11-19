@@ -594,6 +594,18 @@ internal sealed class StreamProxy : IDisposable
 
     private static readonly ConcurrentDictionary<int, Process> RunningBridges = new();
 
+    private static long lastBridgeActivity;
+
+    /// <summary>
+    /// A video is being loaded for playback right now (it started, or it is still reading ahead).
+    /// Saving videos for offline use waits for this to end, so it does not take the connection
+    /// from the picture the user is watching.
+    /// </summary>
+    internal static bool StreamIsLoading =>
+        !RunningBridges.IsEmpty && Environment.TickCount64 - Interlocked.Read(ref lastBridgeActivity) < 3000;
+
+    private static void NoteBridgeActivity() => Interlocked.Exchange(ref lastBridgeActivity, Environment.TickCount64);
+
     /// <summary>Tests: stops the converters this app started (and only those).</summary>
     internal static int KillBridgesForTest()
     {
@@ -660,6 +672,7 @@ internal sealed class StreamProxy : IDisposable
             Process process = Process.Start(info)!;
             ChildJob.Add(process);
             RunningBridges[process.Id] = process;
+            NoteBridgeActivity();
             Trace?.Invoke("bridge: ffmpeg started");
 
             try
@@ -697,6 +710,8 @@ internal sealed class StreamProxy : IDisposable
 
                 while ((read = await body.ReadAsync(buffer, cts.Token)) > 0)
                 {
+                    NoteBridgeActivity();
+
                     if (first)
                     {
                         first = false;
