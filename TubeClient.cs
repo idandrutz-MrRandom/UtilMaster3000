@@ -1732,6 +1732,16 @@ internal sealed class TubeClient : Form
     private bool fillingRecent;
 
     private readonly ComboBox playlistMine = new();
+    private Button playlistLoop = new();
+
+    private void UpdateLoopButton()
+    {
+        bool on = library.Settings.PlaylistLoop;
+
+        playlistLoop.Text = "Loop: " + (on ? "On" : "Off");
+        playlistLoop.BackColor = on ? Theme.Accent : Theme.Search;
+        playlistLoop.ForeColor = on ? Theme.Background : Theme.Strong;
+    }
 
     private void BuildPlaylistBar()
     {
@@ -1796,8 +1806,17 @@ internal sealed class TubeClient : Form
         });
 
         x += 20;
-        Add("Play all", 78, PlayPlaylist);
+        Add("Play in order", 108, PlayPlaylist);
         Add("Shuffle", 74, () => PlayPlaylist(shuffle: true));
+
+        playlistLoop = Add("", 96, () =>
+        {
+            library.Settings.PlaylistLoop = !library.Settings.PlaylistLoop;
+            library.SettingsChanged();
+            UpdateLoopButton();
+        });
+        UpdateLoopButton();
+
         Add("Save all", 78, SavePlaylistOffline);
 
         // ---- row 2: your account's playlists, and the ones you loaded before ----
@@ -2065,7 +2084,8 @@ internal sealed class TubeClient : Form
             list = list.OrderBy(_ => random.Next()).ToList();
         }
 
-        VideoPlayerForm.Play(list, 0);
+        // In order (or shuffled), each video leading into the next; Loop starts it over.
+        VideoPlayerForm.PlayList(list, library.Settings.PlaylistLoop);
     }
 
     private void SavePlaylistOffline()

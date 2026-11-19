@@ -107,6 +107,9 @@ internal sealed class TubeSettings
     /// <summary>Streams start sharper (1080p) when the connection is fast, gentler when it is not.</summary>
     public bool AutoStreamQuality { get; set; } = true;
 
+    /// <summary>Playlists started from the Playlists page start over after the last video.</summary>
+    public bool PlaylistLoop { get; set; }
+
     /// <summary>The recommendations panel beside the video (when the window is wide enough).</summary>
     public bool PlayerSidebar { get; set; } = true;
 

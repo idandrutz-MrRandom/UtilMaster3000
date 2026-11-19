@@ -442,6 +442,10 @@ internal sealed class VideoPlayerForm : Form
     private double speed = 1.0;
     private RepeatMode repeat = RepeatMode.Off;
 
+    // Started from a playlist: the next video is the playlist's next one
+    // (not a recommendation), and the whole list can loop.
+    private bool playlistMode;
+
     // A-B loop (seconds); b < 0 while only A is set.
     private double abA = -1;
     private double abB = -1;
@@ -487,6 +491,21 @@ internal sealed class VideoPlayerForm : Form
         current.Show();
 
         return current;
+    }
+
+    /// <summary>
+    /// Plays a playlist in the order given: each video is followed by the next one
+    /// in the list, and with loop on the list starts again after the last.
+    /// </summary>
+    public static VideoPlayerForm PlayList(List<TubeVideo> playlist, bool loop)
+    {
+        VideoPlayerForm player = Play(playlist, 0);
+
+        player.playlistMode = true;
+        player.repeat = loop ? RepeatMode.Playlist : RepeatMode.Off;
+        player.UpdateButtons();
+
+        return player;
     }
 
     /// <summary>Plays video files. One file also lines up the others in its folder.</summary>
@@ -1858,6 +1877,22 @@ internal sealed class VideoPlayerForm : Form
             endedHandled = false;
             SetPos(0);
             media.Play();
+            return;
+        }
+
+        // A playlist: straight on to its next video.
+        if (playlistMode && index + 1 < playlist.Count)
+        {
+            endedHandled = false;
+            Open(index + 1);
+            return;
+        }
+
+        // The end of a playlist (no loop): stop here, offering Up next without starting it.
+        if (playlistMode && repeat != RepeatMode.Playlist && index + 1 >= playlist.Count)
+        {
+            SetPlaying(false);
+            ShowEndScreen(allowCountdown: false);
             return;
         }
 
