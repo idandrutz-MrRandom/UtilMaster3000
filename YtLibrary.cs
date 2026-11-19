@@ -101,6 +101,9 @@ internal sealed class TubeSettings
     // How video fills the player: 0 = auto, 1 = fill (crop), 2 = fit (bars).
     public int VideoFit { get; set; }
 
+    /// <summary>Subtitle language to switch on automatically ("" = off).</summary>
+    public string SubtitleLanguage { get; set; } = "";
+
     // Simultaneous downloads. One keeps memory, CPU and network light.
     public int Parallel { get; set; } = 1;
 

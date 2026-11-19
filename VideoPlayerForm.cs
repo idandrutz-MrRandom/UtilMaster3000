@@ -69,6 +69,23 @@ internal sealed class VideoPlayerForm : Form
         IsHitTestVisible = false
     };
 
+    // Subtitles, drawn over the bottom of the picture.
+    private readonly WpfControls.TextBlock subtitleText = new()
+    {
+        Foreground = WpfMedia.Brushes.White,
+        Background = new WpfMedia.SolidColorBrush(WpfMedia.Color.FromArgb(170, 0, 0, 0)),
+        FontSize = 28,
+        FontWeight = System.Windows.FontWeights.SemiBold,
+        TextAlignment = System.Windows.TextAlignment.Center,
+        TextWrapping = System.Windows.TextWrapping.Wrap,
+        Padding = new System.Windows.Thickness(14, 4, 14, 5),
+        Margin = new System.Windows.Thickness(0, 0, 0, 36),
+        HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+        VerticalAlignment = System.Windows.VerticalAlignment.Bottom,
+        Visibility = System.Windows.Visibility.Collapsed,
+        IsHitTestVisible = false
+    };
+
     // A picture (opened from the clipboard or as a file) instead of a video.
     private readonly WpfControls.Image picture = new()
     {
@@ -333,6 +350,7 @@ internal sealed class VideoPlayerForm : Form
         BuildEndScreen();
         surface.Children.Add(endScreen);
         surface.Children.Add(osd);
+        surface.Children.Add(subtitleText);
         host.Child = surface;
 
         // Click = play / pause, double click = fullscreen, wheel = volume.
@@ -555,6 +573,7 @@ internal sealed class VideoPlayerForm : Form
         bridged = false;
         streamRetries = 0;
         stallRestarts = 0;
+        ClearSubtitles();
         watchPosition = -1;
         beforeUpgrade = null;
         bridgeBase = null;
@@ -812,6 +831,13 @@ internal sealed class VideoPlayerForm : Form
                 return;
             }
 
+            // Brand-new addresses are refused for ~2.5 s; the first pieces are
+            // being fetched meanwhile. Switch only once they are ready.
+            await Task.Delay(3500);
+
+            if (IsDisposed || index != target || !bridged || bridgeBase == null)
+                return;
+
             double at = Pos;
 
             if (duration > 0 && at > duration - 20)
@@ -980,10 +1006,323 @@ internal sealed class VideoPlayerForm : Form
             double windowShape = host.Width / (double)host.Height;
             double mismatch = Math.Max(videoShape / windowShape, windowShape / videoShape) - 1;
 
-            fill = mismatch <= 0.25;
+            fill = mismatch <= 0.08;
         }
 
         media.Stretch = fill ? WpfMedia.Stretch.UniformToFill : WpfMedia.Stretch.Uniform;
+    }
+
+    // ---------- subtitles ----------
+
+    private record struct Cue(double Start, double End, string Text);
+
+    private List<SubtitleTrack>? subTracks;
+    private List<Cue> subCues = new();
+    private string subLabel = "";
+    private int subLoading;
+    private int lastCue = -1;
+
+    private static readonly System.Net.Http.HttpClient SubtitleHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
+
+    private void ClearSubtitles()
+    {
+        subTracks = null;
+        subCues = new List<Cue>();
+        subLabel = "";
+        lastCue = -1;
+        subtitleText.Visibility = System.Windows.Visibility.Collapsed;
+    }
+
+    private bool SubtitlesAvailable => !LocalMedia.IsLocalId(Current.Id) && !imageMode;
+
+    private ToolStripMenuItem BuildSubtitleMenu(Point where)
+    {
+        string state = subCues.Count > 0 ? ": " + subLabel : "";
+        ToolStripMenuItem subs = new("Subtitles" + state + "   (C)");
+
+        if (!SubtitlesAvailable)
+        {
+            subs.DropDownItems.Add(new ToolStripMenuItem("Not available for local files") { Enabled = false });
+            return subs;
+        }
+
+        if (subTracks == null)
+        {
+            subs.DropDownItems.Add("Find subtitles for this video", null, async (_, _) =>
+            {
+                await LoadSubtitleTracksAsync();
+
+                if (!IsDisposed)
+                    BeginInvoke(() => ShowMenu(where));
+            });
+
+            return subs;
+        }
+
+        if (subTracks.Count == 0)
+        {
+            subs.DropDownItems.Add(new ToolStripMenuItem("This video has no subtitles") { Enabled = false });
+            return subs;
+        }
+
+        ToolStripMenuItem off = new("Off") { Checked = subCues.Count == 0 };
+        off.Click += (_, _) => SubtitlesOff();
+        subs.DropDownItems.Add(off);
+        subs.DropDownItems.Add(new ToolStripSeparator());
+
+        foreach (SubtitleTrack track in subTracks)
+        {
+            SubtitleTrack captured = track;
+
+            ToolStripMenuItem item = new(track.Name) { Checked = subCues.Count > 0 && subLabel == track.Name };
+            item.Click += async (_, _) => await ChooseSubtitleAsync(captured);
+            subs.DropDownItems.Add(item);
+        }
+
+        return subs;
+    }
+
+    private async Task LoadSubtitleTracksAsync()
+    {
+        if (!SubtitlesAvailable || subTracks != null || Interlocked.Exchange(ref subLoading, 1) == 1)
+            return;
+
+        string id = Current.Id;
+        Say("Looking for subtitles...");
+
+        try
+        {
+            List<SubtitleTrack> tracks = await YtDlp.SubtitlesAsync(id, CancellationToken.None);
+
+            if (IsDisposed || Current.Id != id)
+                return;
+
+            subTracks = tracks;
+            Say(tracks.Count == 0 ? "No subtitles for this video" : tracks.Count + " subtitle track(s) found");
+        }
+        catch (Exception ex)
+        {
+            DebugLog?.Invoke("subtitles failed: " + ex.Message);
+            Say("Couldn't look up subtitles");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref subLoading, 0);
+        }
+    }
+
+    // Best track for what you chose before, else English, else the first.
+    private SubtitleTrack? PickTrack()
+    {
+        if (subTracks == null || subTracks.Count == 0)
+            return null;
+
+        string wanted = TubeLibrary.Instance.Settings.SubtitleLanguage;
+
+        return subTracks.FirstOrDefault(t => wanted.Length > 0 && t.Language == wanted && !t.Auto)
+               ?? subTracks.FirstOrDefault(t => wanted.Length > 0 && t.Language == wanted)
+               ?? subTracks.FirstOrDefault(t => t.Language.StartsWith("en") && !t.Auto)
+               ?? subTracks.FirstOrDefault(t => !t.Auto)
+               ?? subTracks[0];
+    }
+
+    private async Task ToggleSubtitlesAsync()
+    {
+        if (!SubtitlesAvailable)
+            return;
+
+        if (subCues.Count > 0)
+        {
+            SubtitlesOff();
+            return;
+        }
+
+        await LoadSubtitleTracksAsync();
+
+        SubtitleTrack? track = PickTrack();
+
+        if (track != null && !IsDisposed)
+            await ChooseSubtitleAsync(track);
+    }
+
+    private void SubtitlesOff()
+    {
+        subCues = new List<Cue>();
+        subLabel = "";
+        lastCue = -1;
+        subtitleText.Visibility = System.Windows.Visibility.Collapsed;
+
+        TubeLibrary.Instance.Settings.SubtitleLanguage = "";
+        TubeLibrary.Instance.SaveNow();
+        Say("Subtitles off");
+    }
+
+    private async Task ChooseSubtitleAsync(SubtitleTrack track)
+    {
+        string id = Current.Id;
+        Say("Loading subtitles...");
+
+        try
+        {
+            string text = await SubtitleHttp.GetStringAsync(track.Url);
+            List<Cue> cues = track.Ext == "json3" ? ParseJson3(text) : ParseVtt(text);
+
+            if (IsDisposed || Current.Id != id)
+                return;
+
+            if (cues.Count == 0)
+            {
+                Say("That subtitle track is empty");
+                return;
+            }
+
+            subCues = cues;
+            subLabel = track.Name;
+            lastCue = -1;
+
+            TubeLibrary.Instance.Settings.SubtitleLanguage = track.Language;
+            TubeLibrary.Instance.SaveNow();
+            Say("Subtitles: " + track.Name);
+        }
+        catch (Exception ex)
+        {
+            DebugLog?.Invoke("subtitle download failed: " + ex.Message);
+            Say("Couldn't load those subtitles");
+        }
+    }
+
+    private static List<Cue> ParseJson3(string json)
+    {
+        List<Cue> cues = new();
+
+        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(json);
+
+        if (!doc.RootElement.TryGetProperty("events", out System.Text.Json.JsonElement events))
+            return cues;
+
+        foreach (System.Text.Json.JsonElement e in events.EnumerateArray())
+        {
+            if (!e.TryGetProperty("segs", out System.Text.Json.JsonElement segs) ||
+                !e.TryGetProperty("tStartMs", out System.Text.Json.JsonElement start))
+            {
+                continue;
+            }
+
+            string text = string.Concat(segs.EnumerateArray()
+                .Select(s => s.TryGetProperty("utf8", out System.Text.Json.JsonElement u) ? u.GetString() : ""))
+                .Replace('\n', ' ').Trim();
+
+            if (text.Length == 0)
+                continue;
+
+            double from = start.GetDouble() / 1000.0;
+            double length = e.TryGetProperty("dDurationMs", out System.Text.Json.JsonElement d) ? d.GetDouble() / 1000.0 : 3;
+
+            cues.Add(new Cue(from, from + Math.Max(0.5, length), text));
+        }
+
+        return Tidy(cues);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex VttTime = new(
+        @"(?:(\d+):)?(\d\d):(\d\d)\.(\d{3})\s*-->\s*(?:(\d+):)?(\d\d):(\d\d)\.(\d{3})");
+
+    private static List<Cue> ParseVtt(string vtt)
+    {
+        List<Cue> cues = new();
+        string[] lines = vtt.Replace("\r", "").Split('\n');
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            System.Text.RegularExpressions.Match m = VttTime.Match(lines[i]);
+
+            if (!m.Success)
+                continue;
+
+            double T(int g) =>
+                (m.Groups[g].Success ? double.Parse(m.Groups[g].Value) * 3600 : 0) +
+                double.Parse(m.Groups[g + 1].Value) * 60 +
+                double.Parse(m.Groups[g + 2].Value) +
+                double.Parse(m.Groups[g + 3].Value) / 1000.0;
+
+            List<string> body = new();
+
+            for (i++; i < lines.Length && lines[i].Trim().Length > 0; i++)
+                body.Add(System.Text.RegularExpressions.Regex.Replace(lines[i], "<[^>]+>", "").Trim());
+
+            string text = string.Join(" ", body.Where(b => b.Length > 0));
+
+            if (text.Length > 0)
+                cues.Add(new Cue(T(1), T(5), System.Net.WebUtility.HtmlDecode(text)));
+        }
+
+        return Tidy(cues);
+    }
+
+    // Sorted, and cut so two cues never overlap on screen.
+    private static List<Cue> Tidy(List<Cue> cues)
+    {
+        cues = cues.OrderBy(c => c.Start).ToList();
+
+        for (int i = 0; i + 1 < cues.Count; i++)
+        {
+            if (cues[i].End > cues[i + 1].Start)
+                cues[i] = cues[i] with { End = cues[i + 1].Start };
+        }
+
+        return cues.Where(c => c.End > c.Start).ToList();
+    }
+
+    private void UpdateSubtitle(double position)
+    {
+        if (subCues.Count == 0)
+        {
+            if (subtitleText.Visibility != System.Windows.Visibility.Collapsed)
+                subtitleText.Visibility = System.Windows.Visibility.Collapsed;
+
+            lastCue = -1;
+            return;
+        }
+
+        int lo = 0, hi = subCues.Count - 1, found = -1;
+
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) / 2;
+
+            if (subCues[mid].Start > position)
+                hi = mid - 1;
+            else if (subCues[mid].End <= position)
+                lo = mid + 1;
+            else
+            {
+                found = mid;
+                break;
+            }
+        }
+
+        // Size follows the window; the text only changes when the cue does.
+        double size = Math.Clamp(host.Height / 22.0, 18, 56);
+
+        if (Math.Abs(subtitleText.FontSize - size) > 1)
+            subtitleText.FontSize = size;
+
+        subtitleText.MaxWidth = Math.Max(200, host.Width * 0.86);
+
+        if (found != lastCue)
+        {
+            lastCue = found;
+
+            if (found < 0)
+            {
+                subtitleText.Visibility = System.Windows.Visibility.Collapsed;
+            }
+            else
+            {
+                subtitleText.Text = subCues[found].Text;
+                subtitleText.Visibility = System.Windows.Visibility.Visible;
+            }
+        }
     }
 
     private void CycleFit()
@@ -1921,7 +2260,9 @@ internal sealed class VideoPlayerForm : Form
             return;
         }
 
-        if (now - watchSince < 7000 || position >= duration - 3 || stallRestarts >= 4)
+        bool justUpgraded = beforeUpgrade != null && now - upgradedAt < 25000;
+
+        if (now - watchSince < (justUpgraded ? 4500 : 7000) || position >= duration - 3 || stallRestarts >= 4)
             return;
 
         stallRestarts++;
@@ -1955,11 +2296,14 @@ internal sealed class VideoPlayerForm : Form
             lastMouse = mouse;
             lastMove = Environment.TickCount64;
 
-            if (fullscreen)
+            if (!bar.Visible)
                 bar.Visible = true;
         }
-        else if (fullscreen && Environment.TickCount64 - lastMove > 2500)
+        else if ((fullscreen || playing && Opened) && bar.Visible &&
+                 Environment.TickCount64 - lastMove > 2500 &&
+                 !bar.RectangleToScreen(bar.ClientRectangle).Contains(mouse))
         {
+            // The controls get out of the way while a video plays.
             bar.Visible = false;
         }
 
@@ -1976,6 +2320,7 @@ internal sealed class VideoPlayerForm : Form
         double position = Pos;
 
         WatchForStall(position);
+        UpdateSubtitle(position);
 
         // Moved away from the end (seek, replay): the next end counts again.
         if (endedHandled && position < duration - 2.0)
@@ -2167,6 +2512,7 @@ internal sealed class VideoPlayerForm : Form
             ShowEndScreen(allowCountdown: false);
         });
 
+        menu.Items.Add(BuildSubtitleMenu(where));
         menu.Items.Add("Video fills window: " + FitNames[TubeLibrary.Instance.Settings.VideoFit] + "   (Z)", null, (_, _) => CycleFit());
         menu.Items.Add("Open a video file...   (Ctrl+O)", null, (_, _) => OpenFileDialog());
         menu.Items.Add("Skip ahead 85 s   (I)", null, (_, _) => Skip(85));
@@ -2351,6 +2697,7 @@ internal sealed class VideoPlayerForm : Form
             case Keys.Control | Keys.O: OpenFileDialog(); return true;
 
             case Keys.Z: CycleFit(); return true;
+            case Keys.C: _ = ToggleSubtitlesAsync(); return true;
 
             case Keys.Control | Keys.C:
                 if (imageMode)

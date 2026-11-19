@@ -2437,7 +2437,7 @@ internal sealed class VideoGrid : Control
         // so clicking one starts playing almost at once.
         int quality = YtDlp.StartHeight;
 
-        foreach (TubeVideo v in list.Take(20))
+        foreach (TubeVideo v in list.Take(10))
         {
             if (v.File == null)
                 YtDlp.Prefetch(v.Id, quality);

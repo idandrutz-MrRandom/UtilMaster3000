@@ -21,6 +21,9 @@ internal sealed record DownloadProgress(double Percent, string Speed, string Eta
 
 internal sealed record StreamInput(string Url, Dictionary<string, string> Headers);
 
+/// <summary>One subtitle track of a video (a language, written by hand or automatic).</summary>
+internal sealed record SubtitleTrack(string Language, string Name, string Url, string Ext, bool Auto);
+
 /// <summary>What to play for a YouTube video (see YtDlp.PlanAsync).</summary>
 internal sealed record StreamPlan(
     List<StreamInput> Inputs, bool Progressive, double Duration, bool CopyVideo, int Height = 0);
@@ -405,8 +408,9 @@ internal static class YtDlp
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (StreamPlan Plan, DateTime Expires)> PlanCache = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> Prefetching = new();
 
-    // Three videos are prepared at a time (and none while YouTube is pushing back).
-    private static readonly SemaphoreSlim PrefetchGate = new(3, 3);
+    // Two videos are prepared at a time, and none while YouTube is pushing back
+    // or while you are waiting for a video you clicked.
+    private static readonly SemaphoreSlim PrefetchGate = new(2, 2);
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> PrefetchStarted = new();
 
     /// <summary>Resolves a video's stream ahead of time so it starts at once.</summary>
@@ -421,6 +425,10 @@ internal static class YtDlp
         {
             await PrefetchGate.WaitAsync();
             PrefetchStarted[key] = true;
+
+            // A video you clicked comes first: do not compete with it.
+            while (Volatile.Read(ref clickedLookups) > 0 && DateTime.UtcNow >= blockedUntil)
+                await Task.Delay(150);
 
             if (DateTime.UtcNow < blockedUntil)
             {
@@ -479,7 +487,18 @@ internal static class YtDlp
             }
         }
 
-        StreamPlan plan = await ResolvePlanAsync(videoId, cookieFile, maxHeight, ct);
+        StreamPlan plan;
+
+        Interlocked.Increment(ref clickedLookups);
+
+        try
+        {
+            plan = await ResolvePlanAsync(videoId, cookieFile, maxHeight, ct);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref clickedLookups);
+        }
 
         if (cookieFile == null)
             PlanCache[key] = (plan, DateTime.UtcNow.AddMinutes(90));
@@ -504,6 +523,7 @@ internal static class YtDlp
 
     // After YouTube asks "are you a bot?", background lookups rest a while.
     private static DateTime blockedUntil = DateTime.MinValue;
+    private static int clickedLookups;
 
     private static async Task<StreamPlan> ResolvePlanAsync(
         string videoId, string? cookieFile, int maxHeight, CancellationToken ct)
@@ -517,6 +537,14 @@ internal static class YtDlp
         catch (AuthExpiredException)
         {
             blockedUntil = DateTime.UtcNow.AddMinutes(15);
+            throw;
+        }
+        catch (InvalidOperationException ex) when (
+            Regex.IsMatch(ex.Message, @"No video formats|needs to be reloaded|not a bot|rate.?limit|HTTP Error 429",
+                RegexOptions.IgnoreCase))
+        {
+            // YouTube is holding back: rest the background lookups for a while.
+            blockedUntil = DateTime.UtcNow.AddMinutes(10);
             throw;
         }
     }
@@ -898,6 +926,94 @@ internal static class YtDlp
         }
 
         return file;
+    }
+
+    /// <summary>The subtitle tracks a video offers (looked up through your account when signed in).</summary>
+    public static async Task<List<SubtitleTrack>> SubtitlesAsync(string videoId, CancellationToken ct)
+    {
+        async Task<List<SubtitleTrack>> Run(string? cookies)
+        {
+            List<string> args = new() { "--no-playlist", "--no-warnings", "--skip-download", "--dump-json" };
+
+            if (cookies != null)
+            {
+                args.Add("--cookies");
+                args.Add(cookies);
+            }
+
+            args.Add("https://www.youtube.com/watch?v=" + videoId);
+
+            ProcResult r = await RunAsync(args, ct);
+            string json = r.Stdout.Trim();
+
+            if (!json.StartsWith('{'))
+                throw new InvalidOperationException(LastError(r.Stderr) ?? "Could not look up the subtitles.");
+
+            using JsonDocument doc = JsonDocument.Parse(json);
+            List<SubtitleTrack> tracks = new();
+
+            void Read(string section, bool auto)
+            {
+                if (!doc.RootElement.TryGetProperty(section, out JsonElement all) ||
+                    all.ValueKind != JsonValueKind.Object)
+                {
+                    return;
+                }
+
+                foreach (JsonProperty lang in all.EnumerateObject())
+                {
+                    // Automatic captions come in 100+ translations; keep the spoken language only.
+                    if (auto && !lang.Name.EndsWith("-orig", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    JsonElement? best = null;
+
+                    foreach (string ext in new[] { "json3", "vtt" })
+                    {
+                        foreach (JsonElement f in lang.Value.EnumerateArray())
+                        {
+                            if (Str(f, "ext") == ext && Str(f, "url") != null)
+                            {
+                                best = f;
+                                break;
+                            }
+                        }
+
+                        if (best != null)
+                            break;
+                    }
+
+                    if (best == null)
+                        continue;
+
+                    string code = auto ? lang.Name[..^5] : lang.Name;
+                    string name = Str(best.Value, "name") ?? code;
+
+                    tracks.Add(new SubtitleTrack(
+                        code, auto ? name.Replace(" (Original)", "") + " (automatic)" : name,
+                        Str(best.Value, "url")!, Str(best.Value, "ext")!, auto));
+                }
+            }
+
+            Read("subtitles", false);
+            Read("automatic_captions", true);
+
+            return tracks;
+        }
+
+        if (YtAccount.SignedIn)
+        {
+            try
+            {
+                return await YtAccount.WithCookieFile(file => Run(file));
+            }
+            catch (AuthExpiredException)
+            {
+                // Fall back to anonymous below.
+            }
+        }
+
+        return await Run(null);
     }
 
     public static string? FindOutput(string folder, string videoId)
