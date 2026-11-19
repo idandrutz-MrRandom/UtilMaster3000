@@ -1409,12 +1409,22 @@ internal sealed class TubeClient : Form
             start = 0;
         }
 
-        VideoPlayerForm.Play(playlist, start);
+        // On the Playlists page: from this video on to the end of the playlist,
+        // and (with Loop on) round again from the first.
+        if (view == View.Playlists && playlist.Count > 1)
+            VideoPlayerForm.PlayList(playlist, library.Settings.PlaylistLoop, start);
+        else
+            VideoPlayerForm.Play(playlist, start);
     }
 
     private void PlayAll()
     {
-        if (grid.Items.Count > 0)
+        if (grid.Items.Count == 0)
+            return;
+
+        if (view == View.Playlists)
+            VideoPlayerForm.PlayList(grid.Items.ToList(), library.Settings.PlaylistLoop);
+        else
             VideoPlayerForm.Play(grid.Items.ToList(), 0);
     }
 

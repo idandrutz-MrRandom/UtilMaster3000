@@ -497,9 +497,11 @@ internal sealed class VideoPlayerForm : Form
     /// Plays a playlist in the order given: each video is followed by the next one
     /// in the list, and with loop on the list starts again after the last.
     /// </summary>
-    public static VideoPlayerForm PlayList(List<TubeVideo> playlist, bool loop)
+    public static VideoPlayerForm PlayList(List<TubeVideo> playlist, bool loop, int start = 0)
     {
-        VideoPlayerForm player = Play(playlist, 0);
+        // Starting in the middle (say song 2) plays on to the end; with loop on the
+        // cycle then restarts from the first.
+        VideoPlayerForm player = Play(playlist, Math.Clamp(start, 0, Math.Max(0, playlist.Count - 1)));
 
         player.playlistMode = true;
         player.repeat = loop ? RepeatMode.Playlist : RepeatMode.Off;
