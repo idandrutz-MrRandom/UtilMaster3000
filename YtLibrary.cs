@@ -145,6 +145,10 @@ internal sealed class TubeSettings
 
     // Saved videos nobody opened for this many days are removed (0 = never).
     public int UnwatchedDeleteDays { get; set; } = 30;
+
+    // Every downloaded video is removed this many hours after it finished
+    // downloading, watched or not (0 = never). Videos marked "Keep" stay.
+    public int DownloadDeleteHours { get; set; } = 2;
 }
 
 internal sealed class TubeData
@@ -563,14 +567,33 @@ internal sealed class TubeLibrary
     {
         int hours = Settings.AutoDeleteHours;
         int days = Settings.UnwatchedDeleteDays;
+        int sinceDownload = Settings.DownloadDeleteHours;
 
-        if (hours <= 0 && days <= 0)
+        if (hours <= 0 && days <= 0 && sinceDownload <= 0)
             return;
 
         List<TubeVideo> remove = new();
 
         lock (gate)
         {
+            // Hours after the download finished, whatever you did with it.
+            if (sinceDownload > 0)
+            {
+                foreach (TubeVideo v in data.Videos.Where(v =>
+                             v.State == VideoState.Done && !v.Keep && v.Id != NowPlayingId))
+                {
+                    // Downloaded before this rule existed: its clock starts now.
+                    if (v.Downloaded == null)
+                    {
+                        v.Downloaded = DateTime.Now;
+                        continue;
+                    }
+
+                    if (DateTime.Now - v.Downloaded.Value >= TimeSpan.FromHours(sinceDownload))
+                        remove.Add(v);
+                }
+            }
+
             // Saved but never finished and not opened for a long time.
             if (days > 0)
             {
@@ -627,15 +650,34 @@ internal sealed class TubeLibrary
     /// <summary>How long until a watched video is deleted (null = not scheduled).</summary>
     public TimeSpan? DeletesIn(TubeVideo video)
     {
-        int hours = Settings.AutoDeleteHours;
-
-        if (hours <= 0 || !video.Watched || video.Keep || video.State != VideoState.Done)
+        if (video.Keep || video.State != VideoState.Done)
             return null;
 
-        DateTime started = video.WatchedAt ?? DateTime.Now;
-        TimeSpan left = started + TimeSpan.FromHours(hours) - DateTime.Now;
+        TimeSpan? best = null;
 
-        return left < TimeSpan.Zero ? TimeSpan.Zero : left;
+        int hours = Settings.AutoDeleteHours;
+
+        if (hours > 0 && video.Watched)
+        {
+            DateTime started = video.WatchedAt ?? DateTime.Now;
+            best = started + TimeSpan.FromHours(hours) - DateTime.Now;
+        }
+
+        int sinceDownload = Settings.DownloadDeleteHours;
+
+        if (sinceDownload > 0)
+        {
+            DateTime downloaded = video.Downloaded ?? DateTime.Now;
+            TimeSpan left = downloaded + TimeSpan.FromHours(sinceDownload) - DateTime.Now;
+
+            if (best == null || left < best)
+                best = left;
+        }
+
+        if (best == null)
+            return null;
+
+        return best < TimeSpan.Zero ? TimeSpan.Zero : best;
     }
 
     public void SetPosition(TubeVideo video, double seconds)

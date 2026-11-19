@@ -1956,6 +1956,10 @@ internal sealed class TubeClient : Form
         Cycle("", "Library size limit", new[] { 10, 25, 50, 100, 250, 500, 1000, 2000 },
             () => library.Settings.MaxGb, v => library.Settings.MaxGb = v, v => v + " GB",
             "When saved videos take more room than this, the oldest watched ones are deleted.");
+        Cycle("", "Delete downloaded videos after", new[] { 0, 1, 2, 6, 12, 24, 48, 168 },
+            () => library.Settings.DownloadDeleteHours, v => library.Settings.DownloadDeleteHours = v,
+            v => v == 0 ? "never" : v < 48 ? v + " h" : v / 24 + " days",
+            "Every downloaded video is removed this long after its download finished, watched or not.\nVideos marked Keep stay, and so does the one you are playing.");
         Cycle("", "Delete watched videos after", new[] { 0, 1, 6, 12, 24, 48, 168, 720 },
             () => library.Settings.AutoDeleteHours, v => library.Settings.AutoDeleteHours = v,
             v => v == 0 ? "never" : v < 48 ? v + " h" : v / 24 + " days",
@@ -3006,23 +3010,19 @@ internal sealed class VideoGrid : Control
                     text += "  -  kept";
 
                 if (v.Watched)
-                {
                     text += "  -  watched";
-
-                    TimeSpan? left = TubeLibrary.Instance.DeletesIn(v);
-
-                    if (left != null)
-                    {
-                        text += left.Value.TotalMinutes < 1
-                            ? "  -  deleting now"
-                            : left.Value.TotalHours >= 1
-                                ? $"  -  deletes in {(int)left.Value.TotalHours} h {left.Value.Minutes} min"
-                                : $"  -  deletes in {left.Value.Minutes} min";
-                    }
-                }
                 else if (v.Position > 5)
-                {
                     text += $"  -  resume {Duration((int)v.Position)}";
+
+                TimeSpan? left = TubeLibrary.Instance.DeletesIn(v);
+
+                if (left != null)
+                {
+                    text += left.Value.TotalMinutes < 1
+                        ? "  -  deleting now"
+                        : left.Value.TotalHours >= 1
+                            ? $"  -  deletes in {(int)left.Value.TotalHours} h {left.Value.Minutes} min"
+                            : $"  -  deletes in {left.Value.Minutes} min";
                 }
 
                 return (text, Theme.On);
