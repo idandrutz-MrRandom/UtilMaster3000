@@ -139,8 +139,55 @@ internal sealed class VideoPlayerForm : Form
             Focusable = false
         };
 
+        // The scroll bar in the player's own style: thin, rounded, accent coloured,
+        // no arrows, transparent track (the default one is a light Windows bar).
+        scroll.Resources.Add(typeof(WpfControls.Primitives.ScrollBar), ThemedScrollBarStyle());
+
         sideHost.Child = scroll;
         sideHost.BackColor = Theme.Background;
+    }
+
+    private static string Hex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    private static System.Windows.Style ThemedScrollBarStyle()
+    {
+        string thumb = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.5f));
+        string hover = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.8f));
+
+        string xaml = $@"
+<Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+       xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
+       TargetType=""{{x:Type ScrollBar}}"">
+  <Setter Property=""Width"" Value=""8""/>
+  <Setter Property=""MinWidth"" Value=""8""/>
+  <Setter Property=""Background"" Value=""Transparent""/>
+  <Setter Property=""Template"">
+    <Setter.Value>
+      <ControlTemplate TargetType=""{{x:Type ScrollBar}}"">
+        <Grid Background=""Transparent"">
+          <Track x:Name=""PART_Track"" IsDirectionReversed=""True"">
+            <Track.Thumb>
+              <Thumb>
+                <Thumb.Template>
+                  <ControlTemplate TargetType=""{{x:Type Thumb}}"">
+                    <Border x:Name=""bar"" Background=""{thumb}"" CornerRadius=""3"" Margin=""1,2,1,2""/>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property=""IsMouseOver"" Value=""True"">
+                        <Setter TargetName=""bar"" Property=""Background"" Value=""{hover}""/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+          </Track>
+        </Grid>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>";
+
+        return (System.Windows.Style)System.Windows.Markup.XamlReader.Parse(xaml);
     }
 
     // Shown when you want it and the window is wide enough; never in fullscreen.
