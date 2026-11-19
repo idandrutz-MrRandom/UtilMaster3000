@@ -1331,6 +1331,76 @@ internal sealed class VideoPlayerForm : Form
         }
     }
 
+    private int skippedInARow;
+
+    private void PrefetchNextSongs()
+    {
+        if (!playlistMode)
+            return;
+
+        for (int k = 1; k <= 2; k++)
+        {
+            int i = index + k;
+
+            if (i >= playlist.Count)
+            {
+                if (repeat != RepeatMode.Playlist)
+                    break;
+
+                i %= playlist.Count;
+            }
+
+            TubeVideo next = playlist[i];
+
+            if (next.File != null || LocalMedia.IsLocalId(next.Id))
+                continue;
+
+            YtDlp.Prefetch(next.Id, YtDlp.StartHeight);
+        }
+    }
+
+    private static bool IsUnavailableError(string message) =>
+        System.Text.RegularExpressions.Regex.IsMatch(message,
+            @"unavailable|not available|private video|has been removed|terminated|deleted|no longer|blocked|copyright|members[- ]only|who has blocked",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>Moves a playlist on past a video that cannot be played. False if there is nothing to move on to.</summary>
+    private bool SkipUnavailable(TubeVideo video)
+    {
+        skippedInARow++;
+
+        // Every video unavailable (with loop on): stop instead of spinning.
+        if (skippedInARow > playlist.Count)
+            return false;
+
+        int next = index + 1 < playlist.Count ? index + 1 : repeat == RepeatMode.Playlist ? 0 : -1;
+
+        DebugLog?.Invoke($"skipping unavailable \"{video.Title}\" ({index + 1} of {playlist.Count})");
+
+        OnUi(() =>
+        {
+            if (IsDisposed)
+                return;
+
+            if (next >= 0)
+            {
+                Say($"Skipped (unavailable): {Trunc(video.Title, 40)}");
+                Open(next);
+            }
+            else
+            {
+                Text = video.Title;
+                Say("Unavailable: " + Trunc(video.Title, 40));
+                SetPlaying(false);
+                ShowEndScreen(allowCountdown: false);
+            }
+        });
+
+        return true;
+    }
+
+    private static string Trunc(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "...";
+
     private async Task StreamAsync(TubeVideo video, int target)
     {
         CancellationTokenSource cts = resolveCts = new CancellationTokenSource();
@@ -1397,6 +1467,10 @@ internal sealed class VideoPlayerForm : Form
         catch (Exception ex)
         {
             if (IsDisposed || index != target)
+                return;
+
+            // In a playlist a dead entry (deleted, private, blocked) is skipped, not a stop sign.
+            if (playlistMode && IsUnavailableError(ex.Message) && SkipUnavailable(video))
                 return;
 
             Failure = ex.Message;
@@ -1809,6 +1883,10 @@ internal sealed class VideoPlayerForm : Form
     {
         Opened = true;
         restartOpened = true;
+        skippedInARow = 0;
+
+        // Playing a playlist: get the next songs ready now, so there is no silence between them.
+        PrefetchNextSongs();
 
         // A new video: new suggestions.
         sideStale = true;

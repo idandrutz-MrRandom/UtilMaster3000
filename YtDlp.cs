@@ -480,14 +480,32 @@ internal static class YtDlp
             if (PlanCache.TryGetValue(key, out var cached) && cached.Expires > DateTime.UtcNow)
                 return cached.Plan;
 
-            // Being resolved right now (hover prefetch): wait for it.
-            if (Prefetching.TryGetValue(key, out Task? running) && PrefetchStarted.ContainsKey(key))
+            // Being resolved right now (a prefetch, at any quality): wait for it.
+            string prefix = videoId + "@";
+            Task? running = Prefetching
+                .Where(p => p.Key.StartsWith(prefix) && PrefetchStarted.ContainsKey(p.Key))
+                .Select(p => p.Value)
+                .FirstOrDefault();
+
+            if (running != null)
             {
                 try { await running.WaitAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
 
                 if (PlanCache.TryGetValue(key, out cached) && cached.Expires > DateTime.UtcNow)
                     return cached.Plan;
             }
+
+            // Already prepared at another quality that is good enough (not above what
+            // was asked, at least 480p)? Starting at once beats a fresh lookup.
+            StreamPlan? close = PlanCache
+                .Where(p => p.Key.StartsWith(prefix) && p.Value.Expires > DateTime.UtcNow)
+                .Select(p => p.Value.Plan)
+                .Where(p => p.Height >= 480 && p.Height <= maxHeight)
+                .OrderByDescending(p => p.Height)
+                .FirstOrDefault();
+
+            if (close != null)
+                return close;
         }
 
         StreamPlan plan;
@@ -596,9 +614,11 @@ internal static class YtDlp
         {
             return await ResolvePlanCoreAsync(videoId, cookieFile, maxHeight, ct, noSkip: false);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex) when (
+            !Regex.IsMatch(ex.Message, @"Video unavailable|is not available|Private video|has been removed|terminated|account associated", RegexOptions.IgnoreCase))
         {
             // Maybe a live stream or an unusual video: look at everything.
+            // (A video that is plainly gone is not asked about twice.)
             return await ResolvePlanCoreAsync(videoId, cookieFile, maxHeight, ct, noSkip: true);
         }
     }
