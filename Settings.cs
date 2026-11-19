@@ -66,6 +66,7 @@ internal sealed class AppSettings
 
     // Screen recordings (MP4) also capture the sound the PC is playing.
     public bool RecordSound { get; set; } = true;
+    public bool CalcDegrees { get; set; }
 
     // A finished recording is also put on the clipboard (and its history).
     public bool RecordToClipboard { get; set; } = true;

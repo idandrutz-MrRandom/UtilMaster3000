@@ -157,6 +157,7 @@ internal sealed class VideoPlayerForm : Form
     // stream has no seek index, so a seek restarts it at the new time and
     // the position is "start offset + time since the restart".
     private bool bridged;
+    private int streamRetries;
     private double bridgeOffset;
     private double bridgeDuration;
     private BridgeSpec? bridgeBase;
@@ -544,6 +545,7 @@ internal sealed class VideoPlayerForm : Form
         Failure = null;
         duration = 0;
         bridged = false;
+        streamRetries = 0;
         bridgeBase = null;
         bridgeOffset = 0;
         fallback = null;
@@ -1060,6 +1062,22 @@ internal sealed class VideoPlayerForm : Form
 
             if (next())
                 return;
+        }
+
+        // A streamed video whose addresses went bad: look it up again,
+        // quietly, before bothering you with an error.
+        if (Current.File == null && !LocalMedia.IsLocalId(Current.Id) && streamRetries < 2)
+        {
+            streamRetries++;
+            DebugLog?.Invoke("stream failed (" + error?.Message + "), looking it up again");
+            Say("Retrying...");
+
+            YtDlp.Forget(Current.Id);
+            resolveCts?.Cancel();
+            bridged = false;
+            bridgeBase = null;
+            _ = StreamAsync(Current, index);
+            return;
         }
 
         Failure = error?.Message ?? "unknown error";

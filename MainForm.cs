@@ -172,6 +172,7 @@ public sealed partial class MainForm : Form
         StartupManager.MigrateLegacy();
 
         settings = AppSettings.Load();
+        Calc.Degrees = settings.CalcDegrees;
         Theme.Configure(settings);
 
         toggleKey.Mods = settings.HotkeyModifiers;
@@ -607,6 +608,7 @@ public sealed partial class MainForm : Form
             "Find" => "Search files and open windows...",
             "Clipboard" => "Search clipboard history...",
             "TextTool" => $"{textToolName}: type or paste text...",
+            "Calc" => "Calculate: 5squared, 3root(27), sin(30deg), 20% of 150...",
             _ => "Go..."
         };
 

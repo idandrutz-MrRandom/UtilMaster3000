@@ -381,6 +381,118 @@ public sealed partial class MainForm
         return Renumber(list);
     }
 
+    // ---- Calculator page: type a calculation, Enter copies the answer ----
+
+    private const string CalcHelp =
+        "5squared   6cubed   2^10   17%5   5!" + NL +
+        "3root(27)   root(27,3)   sqrt(2)   √9" + NL +
+        "50% of 80   100+10%   20 percent of 150" + NL +
+        "sin(30deg)   cos(pi)   ln(e)   log(1000)   log(8,2)" + NL +
+        "2pi   3(4+5)   2 to the power of 8" + NL +
+        "5 plus 3 times 2   10 divided by 4" + NL +
+        "sum(1,2,3)   avg(4,8)   gcd(12,18)   10 choose 3" + NL +
+        "x=5 then x*2   ans = the last answer" + NL +
+        "0xFF   0b1010   1e3";
+
+    private const string NL = "\n";
+
+    private List<MenuEntry> CalcPage(string query)
+    {
+        List<MenuEntry> list = new();
+        Calc.Degrees = settings.CalcDegrees;
+
+        string input = searchBox.Text.Trim();
+
+        if (input.Length == 0)
+        {
+            list.Add(Info("Type a calculation above, for example 5squared or 3root(27)"));
+
+            if (Calc.History.Count > 0)
+                list.Add(Info("Recent"));
+
+            foreach ((string expression, string result) in Calc.History.Take(8))
+            {
+                string captured = result;
+
+                list.Add(new MenuEntry(
+                    0, "", $"{expression} = {result}",
+                    run: () => CopyValue(captured),
+                    expandText: expression + NL + "= " + result));
+            }
+        }
+        else
+        {
+            double value = Calc.Evaluate(input, out string? error, out string? assigned);
+
+            if (error != null)
+            {
+                list.Add(Info(error));
+            }
+            else
+            {
+                string text = Calc.Format(value);
+                string shown = assigned != null ? $"{assigned} = {text}" : "= " + text;
+
+                list.Add(new MenuEntry(
+                    0, "", shown,
+                    run: () =>
+                    {
+                        Calc.Remember(input, value);
+                        CopyValue(text, "Copied: " + text);
+                    },
+                    expandText: input + NL + "= " + text));
+
+                foreach (string extra in Calc.Extras(value))
+                {
+                    string copy = extra[(extra.IndexOf(": ", StringComparison.Ordinal) + 2)..];
+
+                    list.Add(Act("", extra, () =>
+                    {
+                        Calc.Remember(input, value);
+                        CopyValue(copy);
+                    }));
+                }
+
+                list.Add(Act("", "Paste the answer into the window you came from", () =>
+                {
+                    Calc.Remember(input, value);
+
+                    if (!SetClipboard(text))
+                        return;
+
+                    HideToTray();
+                    PasteIntoPrevious();
+                }));
+            }
+        }
+
+        list.Add(Act("",
+            $"Trig angles: {(settings.CalcDegrees ? "degrees" : "radians")}", () =>
+            {
+                settings.CalcDegrees = !settings.CalcDegrees;
+                Calc.Degrees = settings.CalcDegrees;
+                SaveSettings();
+                RefreshPage();
+            }));
+
+        string vars = Calc.VariablesText();
+
+        if (vars.Length > 0)
+            list.Add(Info("Variables:  " + vars));
+
+        if (Calc.History.Count > 0 && input.Length == 0)
+            list.Add(Act("", "Clear history", () =>
+            {
+                Calc.ClearHistory();
+                RefreshPage();
+            }));
+
+        list.Add(Act("", "What can I type?", () => Say("Calculator", CalcHelp)));
+        list.Add(BackEntry());
+
+        return Renumber(list);
+    }
+
     private List<MenuEntry> BuildTextPage() => Renumber(new[]
     {
         TextAction("", "Latin → Russian", Transliterator.Convert),
@@ -1127,6 +1239,7 @@ public sealed partial class MainForm
             "Clipboard" => ClipboardPage(query),
             "Shortcuts" => ShortcutsPage(query),
             "TextTool" => TextToolPage(query),
+            "Calc" => CalcPage(query),
             "Vault" => VaultPage(query),
             "VaultEntry" => VaultEntryPage(),
             _ => FilterStatic(query)

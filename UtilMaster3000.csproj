@@ -27,4 +27,9 @@
     <RuntimeHostConfigurationOption Include="System.GC.RetainVM" Value="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="UtilMaster3000\**" />
+    <EmbeddedResource Remove="UtilMaster3000\**" />
+    <None Remove="UtilMaster3000\**" />
+  </ItemGroup>
 </Project>

@@ -452,6 +452,13 @@ internal static class YtDlp
         }));
     }
 
+    /// <summary>Drops what is remembered about a video (its addresses went bad).</summary>
+    public static void Forget(string videoId)
+    {
+        foreach (string key in PlanCache.Keys.Where(k => k.StartsWith(videoId + "@")).ToList())
+            PlanCache.TryRemove(key, out _);
+    }
+
     public static async Task<StreamPlan> PlanAsync(
         string videoId, string? cookieFile, int maxHeight, CancellationToken ct)
     {

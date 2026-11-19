@@ -334,7 +334,7 @@ internal sealed class StreamProxy : IDisposable
         Exception? last = null;
 
         // A brand-new YouTube address answers "403" for the first ~2.5 s;
-        // keep asking (4 times a second) until it opens, but give up after 9 s.
+        // keep asking (4 times a second) until it opens, but give up after 25 s.
         System.Diagnostics.Stopwatch waited = System.Diagnostics.Stopwatch.StartNew();
 
         for (int attempt = 0; ; attempt++)
@@ -370,7 +370,7 @@ internal sealed class StreamProxy : IDisposable
             {
                 last = ex;
 
-                if (waited.ElapsedMilliseconds > 9000)
+                if (waited.ElapsedMilliseconds > 25000)
                     throw;
 
                 await Task.Delay(250, token);
