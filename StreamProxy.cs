@@ -542,6 +542,32 @@ internal sealed class StreamProxy : IDisposable
         return finished == run.FirstOutput.Task && run.FirstOutput.Task.Result;
     }
 
+    private static readonly ConcurrentDictionary<int, Process> RunningBridges = new();
+
+    /// <summary>Tests: stops the converters this app started (and only those).</summary>
+    internal static int KillBridgesForTest()
+    {
+        int n = 0;
+
+        foreach (Process process in RunningBridges.Values.ToList())
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(true);
+                    n++;
+                }
+            }
+            catch
+            {
+                // Already gone.
+            }
+        }
+
+        return n;
+    }
+
     // One ffmpeg conversion whose output is read ahead into a queue.
     private sealed class BridgeRun : IDisposable
     {
@@ -554,9 +580,12 @@ internal sealed class StreamProxy : IDisposable
 
         public TaskCompletionSource<bool> FirstOutput { get; } = new();
 
+        private readonly int processId;
+
         private BridgeRun(Process process, CancellationToken outer)
         {
             ffmpeg = process;
+            processId = process.Id;
             cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
         }
 
@@ -580,6 +609,7 @@ internal sealed class StreamProxy : IDisposable
 
             Process process = Process.Start(info)!;
             ChildJob.Add(process);
+            RunningBridges[process.Id] = process;
             Trace?.Invoke("bridge: ffmpeg started");
 
             try
@@ -668,6 +698,7 @@ internal sealed class StreamProxy : IDisposable
                 // Already finished.
             }
 
+            RunningBridges.TryRemove(processId, out _);
             ffmpeg.Dispose();
         }
     }

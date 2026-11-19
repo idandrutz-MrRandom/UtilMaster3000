@@ -376,6 +376,7 @@ internal sealed class VideoPlayerForm : Form
 
     // Stall watchdog: if a streamed picture stops moving, reconnect.
     private double watchPosition = -1;
+    private long lastWatchLog;
     private long watchSince;
     private int stallRestarts;
     private BridgeSpec? beforeUpgrade;
@@ -796,6 +797,8 @@ internal sealed class VideoPlayerForm : Form
         bridged = false;
         streamRetries = 0;
         stallRestarts = 0;
+        prematureEnds = 0;
+        lastPlayPosition = 0;
         ClearSubtitles();
         watchPosition = -1;
         beforeUpgrade = null;
@@ -1002,6 +1005,8 @@ internal sealed class VideoPlayerForm : Form
     // Every restart (a seek, or "Reconnecting...") checks itself: if no
     // picture appears it fetches fresh stream addresses and tries again.
     private int restartGeneration;
+    private double lastPlayPosition;
+    private int prematureEnds;
     private volatile bool restartOpened;
 
     private void RestartBridge(double seconds) => RestartBridge(seconds, 0);
@@ -1070,10 +1075,15 @@ internal sealed class VideoPlayerForm : Form
                 }, 0);
 
                 if (state == 0)
+                {
+                    DebugLog?.Invoke($"verify #{generation}: superseded or closed after {waited.ElapsedMilliseconds} ms");
                     return;
+                }
 
                 if (state == 2)
                 {
+                    DebugLog?.Invoke($"verify #{generation}: picture moving after {waited.ElapsedMilliseconds} ms");
+
                     if (attempt > 0)
                         OnUiThread(() => { Say("Back"); return 0; }, 0);
 
@@ -1761,7 +1771,21 @@ internal sealed class VideoPlayerForm : Form
 
     private void OnEnded()
     {
-        DebugLog?.Invoke($"MediaEnded on {Current.Title} position={Pos:0.0}/{duration:0.0}");
+        DebugLog?.Invoke($"MediaEnded on {Current.Title} position={Pos:0.0}/{duration:0.0} (last seen {lastPlayPosition:0.0})");
+
+        // A streamed video that "ends" far from its real end means the data
+        // stopped coming: carry on from where it was instead of stopping.
+        if (bridged && bridgeBase != null && duration > 30 && lastPlayPosition > 0 &&
+            lastPlayPosition < duration - 8 && prematureEnds < 6)
+        {
+            prematureEnds++;
+            DebugLog?.Invoke($"  ended early at {lastPlayPosition:0.0}s of {duration:0.0}s: reconnecting (try {prematureEnds})");
+            Say("Reconnecting...");
+
+            playing = true;
+            RestartBridge(Math.Max(0, lastPlayPosition - 1));
+            return;
+        }
 
         if (endedHandled)
         {
@@ -2656,6 +2680,12 @@ internal sealed class VideoPlayerForm : Form
             return;
         }
 
+        if (position <= watchPosition + 0.05 && now - watchSince > 3000 && now - lastWatchLog > 5000)
+        {
+            lastWatchLog = now;
+            DebugLog?.Invoke($"watch: no movement for {(now - watchSince) / 1000.0:0.0}s at {position:0.0}s (restarts so far {stallRestarts}, duration {duration:0})");
+        }
+
         if (watchPosition < 0 || position > watchPosition + 0.05 || position < watchPosition - 0.5)
         {
             watchPosition = position;
@@ -2721,6 +2751,9 @@ internal sealed class VideoPlayerForm : Form
             return;
 
         double position = Pos;
+
+        if (playing && !EndScreenVisible && position > 0)
+            lastPlayPosition = position;
 
         WatchForStall(position);
         UpdateSubtitle(position);
