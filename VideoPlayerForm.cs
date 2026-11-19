@@ -121,6 +121,131 @@ internal sealed class VideoPlayerForm : Form
     private static extern bool DeleteObject(IntPtr handle);
 
     private readonly Panel bar = new();
+
+    // ---- recommendations panel ----
+    private readonly ElementHost sideHost = new() { Dock = DockStyle.Right, Width = 236, Visible = false };
+    private readonly WpfControls.StackPanel sideList = new() { Margin = new System.Windows.Thickness(4, 6, 4, 14) };
+    private readonly List<(WpfControls.Image Image, TubeVideo Video)> sideThumbs = new();
+    private bool sideStale = true;
+
+    private void BuildSidebar()
+    {
+        WpfControls.ScrollViewer scroll = new()
+        {
+            Content = sideList,
+            VerticalScrollBarVisibility = WpfControls.ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = WpfControls.ScrollBarVisibility.Disabled,
+            Background = Brush(Theme.Background),
+            Focusable = false
+        };
+
+        sideHost.Child = scroll;
+        sideHost.BackColor = Theme.Background;
+    }
+
+    // Shown when you want it and the window is wide enough; never in fullscreen.
+    private bool SidebarWanted =>
+        TubeLibrary.Instance.Settings.PlayerSidebar && !fullscreen && ClientSize.Width >= 1000 && !imageMode;
+
+    private void UpdateSidebar()
+    {
+        bool show = SidebarWanted;
+
+        if (sideHost.Visible != show)
+        {
+            sideHost.Visible = show;
+            PlaceBar();
+        }
+
+        if (show && sideStale)
+            RefreshSidebar();
+    }
+
+    private void ToggleSidebar()
+    {
+        TubeSettings s = TubeLibrary.Instance.Settings;
+        s.PlayerSidebar = !s.PlayerSidebar;
+        TubeLibrary.Instance.SaveNow();
+
+        sideStale = true;
+        UpdateSidebar();
+        Say(s.PlayerSidebar
+            ? (SidebarWanted ? "Recommendations: on" : "Recommendations: on (the window is too narrow here)")
+            : "Recommendations: off");
+    }
+
+    /// <summary>Fills the side panel with what to watch next (same picks as "Up next").</summary>
+    public void RefreshSidebar()
+    {
+        sideStale = false;
+        sideList.Children.Clear();
+        sideThumbs.Clear();
+
+        sideList.Children.Add(new WpfControls.TextBlock
+        {
+            Text = "Recommended",
+            Foreground = Brush(Theme.Accent),
+            FontSize = 14,
+            FontWeight = System.Windows.FontWeights.SemiBold,
+            Margin = new System.Windows.Thickness(8, 4, 0, 6)
+        });
+
+        List<TubeVideo> picks;
+
+        try
+        {
+            picks = BuildChoices(14);
+        }
+        catch
+        {
+            picks = new List<TubeVideo>();
+        }
+
+        if (picks.Count == 0)
+        {
+            sideList.Children.Add(new WpfControls.TextBlock
+            {
+                Text = "Nothing to suggest yet.\nSign in under UtilTube Settings, or let your feeds load.",
+                Foreground = Brush(Theme.Text),
+                TextWrapping = System.Windows.TextWrapping.Wrap,
+                FontSize = 12,
+                Margin = new System.Windows.Thickness(8, 4, 8, 0)
+            });
+
+            return;
+        }
+
+        foreach (TubeVideo video in picks)
+        {
+            WpfControls.Button card = MakeCard(video, false);
+            card.Margin = new System.Windows.Thickness(2, 2, 2, 4);
+
+            // The card's picture is filled when it arrives (the end screen keeps its own list).
+            if (card.Content is WpfControls.StackPanel stack && stack.Children[0] is WpfControls.Image image)
+            {
+                endThumbs.RemoveAll(t => t.Image == image);
+                sideThumbs.Add((image, video));
+                _ = LoadSideThumbAsync(image, video);
+            }
+
+            sideList.Children.Add(card);
+        }
+    }
+
+    private async Task LoadSideThumbAsync(WpfControls.Image image, TubeVideo video)
+    {
+        try
+        {
+            await ThumbCache.EnsureAsync(video.Id);
+
+            if (!IsDisposed)
+                OnUi(() => FillThumb(image, video));
+        }
+        catch
+        {
+            // No picture: the title is enough.
+        }
+    }
     private BarWindow barWindow = null!;
     private const int BarHeight = 52;
 
@@ -147,6 +272,17 @@ internal sealed class VideoPlayerForm : Form
                 return p;
             }
         }
+
+        // F, Space, arrows... work even right after clicking a button here.
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData) =>
+            (Owner is VideoPlayerForm player && player.ForwardKey(keyData)) ||
+            base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    internal bool ForwardKey(Keys keyData)
+    {
+        Message none = default;
+        return ProcessCmdKey(ref none, keyData);
     }
 
     private bool BarShown
@@ -175,7 +311,7 @@ internal sealed class VideoPlayerForm : Form
         if (barWindow == null || IsDisposed)
             return;
 
-        Rectangle c = RectangleToScreen(ClientRectangle);
+        Rectangle c = host.RectangleToScreen(host.ClientRectangle);
         barWindow.SetBounds(c.Left, c.Bottom - BarHeight, c.Width, BarHeight);
 
         double wanted = Math.Clamp(TubeLibrary.Instance.Settings.PlayerBarOpacity, 20, 100) / 100.0;
@@ -444,6 +580,10 @@ internal sealed class VideoPlayerForm : Form
 
         Controls.Add(host);
 
+        // Recommendations beside the picture.
+        BuildSidebar();
+        Controls.Add(sideHost);
+
         // The controls live in their own see-through window floating over the
         // bottom of the picture (the video keeps the whole window).
         bar.Dock = DockStyle.Fill;
@@ -451,7 +591,7 @@ internal sealed class VideoPlayerForm : Form
         barWindow.Controls.Add(bar);
 
         LocationChanged += (_, _) => PlaceBar();
-        SizeChanged += (_, _) => PlaceBar();
+        SizeChanged += (_, _) => { UpdateSidebar(); PlaceBar(); };
         Shown += (_, _) =>
         {
             PlaceBar();
@@ -597,21 +737,25 @@ internal sealed class VideoPlayerForm : Form
         LayoutBar();
     }
 
+    private const int TimeLabelWidth = 118;   // fixed, so the centred group never shifts
+
     private void LayoutBar()
     {
         // top row: seek line across the full width
         seek.SetBounds(6, 2, Math.Max(60, bar.Width - 12), 16);
 
-        // bottom row: left group ...
+        // bottom row: the playback group in the middle (easy to reach) ...
         int y = 20;
-        int x = 6;
+        int groupWidth = 32 + 32 + 36 + 32 + 78 + TimeLabelWidth;
+        int x = Math.Max(6, (bar.Width - groupWidth) / 2);
 
         prev.Location = new Point(x, y); x += 32;
         play.Location = new Point(x, y); x += 32;
         next.Location = new Point(x, y); x += 36;
         muteButton.Location = new Point(x, y); x += 32;
         volumeBar.SetBounds(x, y, 70, 28); x += 78;
-        time.Location = new Point(x, y);
+        time.AutoSize = false;
+        time.SetBounds(x, y, TimeLabelWidth, time.Height);
 
         // ... and right group
         int right = bar.Width - 6;
@@ -1581,6 +1725,10 @@ internal sealed class VideoPlayerForm : Form
     {
         Opened = true;
         restartOpened = true;
+
+        // A new video: new suggestions.
+        sideStale = true;
+        UpdateSidebar();
 
         FitWindowTo(media.NaturalVideoWidth, media.NaturalVideoHeight);
         ApplyFit();
@@ -2798,6 +2946,8 @@ internal sealed class VideoPlayerForm : Form
         });
 
         menu.Items.Add(BuildSubtitleMenu(where));
+        menu.Items.Add("Recommendations beside the video: " +
+            (TubeLibrary.Instance.Settings.PlayerSidebar ? "on" : "off") + "   (G)", null, (_, _) => ToggleSidebar());
         menu.Items.Add("Video fills window: " + FitNames[TubeLibrary.Instance.Settings.VideoFit] + "   (Z)", null, (_, _) => CycleFit());
         menu.Items.Add("Open a video file...   (Ctrl+O)", null, (_, _) => OpenFileDialog());
         menu.Items.Add("Skip ahead 85 s   (I)", null, (_, _) => Skip(85));
@@ -2916,12 +3066,14 @@ internal sealed class VideoPlayerForm : Form
             Bounds = screen;
 
             fullscreen = true;
+            UpdateSidebar();
             lastMove = Environment.TickCount64;
         }
         else
         {
             fullscreen = false;
             BarShown = true;
+            UpdateSidebar();
 
             // Back to how it was: usually the maximized "full windowed" mode.
             FormBorderStyle = savedBorder;
@@ -2991,6 +3143,7 @@ internal sealed class VideoPlayerForm : Form
 
                 return true;
 
+            case Keys.G: ToggleSidebar(); return true;
             case Keys.Z: CycleFit(); return true;
             case Keys.C: _ = ToggleSubtitlesAsync(); return true;
 
