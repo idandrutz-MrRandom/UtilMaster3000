@@ -121,6 +121,68 @@ internal sealed class VideoPlayerForm : Form
     private static extern bool DeleteObject(IntPtr handle);
 
     private readonly Panel bar = new();
+    private BarWindow barWindow = null!;
+    private const int BarHeight = 52;
+
+    // Never takes focus, so the keyboard keeps working in the player.
+    private sealed class BarWindow : Form
+    {
+        public BarWindow()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = Theme.Background;
+            Opacity = 0.55;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams p = base.CreateParams;
+                p.ExStyle |= 0x08000000 | 0x00000080;   // no activate, tool window
+                return p;
+            }
+        }
+    }
+
+    private bool BarShown
+    {
+        get => barWindow.Visible;
+        set
+        {
+            if (barWindow.Visible == value)
+                return;
+
+            if (value)
+            {
+                PlaceBar();
+                barWindow.Show(this);
+            }
+            else
+            {
+                barWindow.Hide();
+            }
+        }
+    }
+
+    // Over the bottom edge of the picture, as wide as the window.
+    private void PlaceBar()
+    {
+        if (barWindow == null || IsDisposed)
+            return;
+
+        Rectangle c = RectangleToScreen(ClientRectangle);
+        barWindow.SetBounds(c.Left, c.Bottom - BarHeight, c.Width, BarHeight);
+
+        double wanted = Math.Clamp(TubeLibrary.Instance.Settings.PlayerBarOpacity, 20, 100) / 100.0;
+
+        if (Math.Abs(barWindow.Opacity - wanted) > 0.01)
+            barWindow.Opacity = wanted;
+    }
     private readonly Button prev = new();
     private readonly Button play = new();
     private readonly Button next = new();
@@ -381,12 +443,29 @@ internal sealed class VideoPlayerForm : Form
         BuildBar();
 
         Controls.Add(host);
-        Controls.Add(bar);
+
+        // The controls live in their own see-through window floating over the
+        // bottom of the picture (the video keeps the whole window).
+        bar.Dock = DockStyle.Fill;
+        barWindow = new BarWindow();
+        barWindow.Controls.Add(bar);
+
+        LocationChanged += (_, _) => PlaceBar();
+        SizeChanged += (_, _) => PlaceBar();
+        Shown += (_, _) =>
+        {
+            PlaceBar();
+            barWindow.Show(this);
+        };
+        FormClosed += (_, _) => barWindow.Close();
 
         host.Resize += (_, _) => ApplyFit();
 
         tick.Tick += (_, _) => OnTick();
         tick.Start();
+
+        smoothTimer.Tick += (_, _) => SmoothSeek();
+        smoothTimer.Start();
 
         osdTimer.Tick += (_, _) =>
         {
@@ -439,7 +518,6 @@ internal sealed class VideoPlayerForm : Form
     private void BuildBar()
     {
         // Two slim rows: the seek line on top, the buttons below it.
-        bar.Dock = DockStyle.Bottom;
         bar.Height = 52;
         bar.BackColor = Theme.Background;
 
@@ -769,21 +847,34 @@ internal sealed class VideoPlayerForm : Form
         bridgeDuration = knownDuration;
         bridgeOffset = start;
 
+        restartOpened = false;
         StartSource(new Uri(proxy.RegisterBridge(spec with { StartSeconds = start })));
+
+        // A video that never opens is retried with fresh addresses, not left loading.
+        int generation = ++restartGeneration;
+        _ = VerifyRestartAsync(generation, start, 0, 16000);
     }
 
-    private void RestartBridge(double seconds)
+    // Every restart (a seek, or "Reconnecting...") checks itself: if no
+    // picture appears it fetches fresh stream addresses and tries again.
+    private int restartGeneration;
+    private volatile bool restartOpened;
+
+    private void RestartBridge(double seconds) => RestartBridge(seconds, 0);
+
+    private void RestartBridge(double seconds, int attempt)
     {
         if (bridgeBase == null || proxy == null)
             return;
 
         bool wasPlaying = playing;
 
-        DebugLog?.Invoke($"RestartBridge({seconds:0.0}) from: " + string.Join(" < ",
+        DebugLog?.Invoke($"RestartBridge({seconds:0.0}, try {attempt + 1}) from: " + string.Join(" < ",
             new System.Diagnostics.StackTrace().GetFrames().Skip(1).Take(4).Select(f => f.GetMethod()?.Name)));
 
         restartedAt = Environment.TickCount64;
         bridgeOffset = Math.Max(0, seconds);
+        restartOpened = false;
         media.Source = new Uri(proxy.RegisterBridge(bridgeBase with { StartSeconds = bridgeOffset }));
         ApplySpeed();
 
@@ -791,6 +882,111 @@ internal sealed class VideoPlayerForm : Form
             media.Play();
         else
             media.Pause();
+
+        int generation = ++restartGeneration;
+        _ = VerifyRestartAsync(generation, seconds, attempt);
+    }
+
+    // Runs on the UI thread whatever thread asks (the check below awaits).
+    private T OnUiThread<T>(Func<T> read, T fallback)
+    {
+        try
+        {
+            if (IsDisposed)
+                return fallback;
+
+            return InvokeRequired ? (T)Invoke(read)! : read();
+        }
+        catch (Exception)
+        {
+            return fallback;
+        }
+    }
+
+    private async Task VerifyRestartAsync(int generation, double seconds, int attempt, int baseMs = 9000)
+    {
+        // Seeking inside a fresh stream takes a few seconds; later tries wait longer.
+        int timeoutMs = baseMs + attempt * 3000;
+        Stopwatch waited = Stopwatch.StartNew();
+
+        try
+        {
+            while (waited.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(200);
+
+                // 0 = something newer took over (another seek, a new video, closed), 1 = still waiting, 2 = playing
+                int state = OnUiThread(() =>
+                {
+                    if (generation != restartGeneration)
+                        return 0;
+
+                    // Picture is moving again (or we are paused and the media opened).
+                    return restartOpened && (media.Position.TotalSeconds > 0.3 || !playing) ? 2 : 1;
+                }, 0);
+
+                if (state == 0)
+                    return;
+
+                if (state == 2)
+                {
+                    if (attempt > 0)
+                        OnUiThread(() => { Say("Back"); return 0; }, 0);
+
+                    return;
+                }
+            }
+
+            if (OnUiThread(() => generation != restartGeneration || bridgeBase == null, true))
+                return;
+
+            string id = OnUiThread(() => Current.Id, "");
+
+            if (attempt >= 3)
+            {
+                DebugLog?.Invoke("restart: gave up after 4 tries");
+                OnUiThread(() => { Say("Couldn't reconnect. Press F5 to try again, or reopen the video."); return 0; }, 0);
+                return;
+            }
+
+            DebugLog?.Invoke($"restart: no picture after {timeoutMs} ms, trying again with fresh addresses");
+            OnUiThread(() => { Say($"Reconnecting (try {attempt + 2} of 4)..."); return 0; }, 0);
+
+            // Fresh stream addresses: the old ones may have gone stale or been refused.
+            StreamPlan? plan = null;
+
+            try
+            {
+                YtDlp.Forget(id);
+                plan = await YtDlp.PlanAsync(id, null, YtDlp.StartHeight, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                DebugLog?.Invoke("restart: new addresses failed: " + ex.Message);
+            }
+
+            OnUiThread(() =>
+            {
+                if (generation != restartGeneration)
+                    return 0;
+
+                if (plan != null && !plan.Progressive && plan.Inputs.Count > 0)
+                {
+                    bridgeBase = new BridgeSpec(
+                        plan.Inputs.Select(x => new BridgeInput(x.Url, x.Headers)).ToList(),
+                        0,
+                        plan.CopyVideo);
+                }
+
+                // From the 2nd retry on, start a little earlier: an earlier start is easier to find.
+                RestartBridge(attempt >= 1 ? Math.Max(0, seconds - 8) : seconds, attempt + 1);
+                return 0;
+            }, 0);
+        }
+        catch (Exception ex)
+        {
+            DebugLog?.Invoke("restart check failed: " + ex.Message);
+        }
     }
 
     private void StartSource(Uri uri)
@@ -1011,14 +1207,14 @@ internal sealed class VideoPlayerForm : Form
         int frameH = Height - ClientSize.Height;
 
         double maxW = area.Width * 0.97 - frameW;
-        double maxH = area.Height * 0.97 - frameH - bar.Height;
+        double maxH = area.Height * 0.97 - frameH;
 
         double scale = Math.Min(Math.Min(maxW / pixelWidth, maxH / pixelHeight), 1.5);
 
         int w = Math.Max(MinimumSize.Width - frameW, (int)Math.Round(pixelWidth * scale));
-        int h = Math.Max(MinimumSize.Height - frameH - bar.Height, (int)Math.Round(pixelHeight * scale));
+        int h = Math.Max(MinimumSize.Height - frameH, (int)Math.Round(pixelHeight * scale));
 
-        ClientSize = new Size(w, h + bar.Height);
+        ClientSize = new Size(w, h);
 
         Location = new Point(
             area.Left + (area.Width - Width) / 2,
@@ -1384,6 +1580,7 @@ internal sealed class VideoPlayerForm : Form
     private void OnOpened()
     {
         Opened = true;
+        restartOpened = true;
 
         FitWindowTo(media.NaturalVideoWidth, media.NaturalVideoHeight);
         ApplyFit();
@@ -2354,15 +2551,15 @@ internal sealed class VideoPlayerForm : Form
             lastMouse = mouse;
             lastMove = Environment.TickCount64;
 
-            if (!bar.Visible)
-                bar.Visible = true;
+            if (!BarShown)
+                BarShown = true;
         }
-        else if ((fullscreen || playing && Opened) && bar.Visible &&
+        else if ((fullscreen || playing && Opened) && BarShown &&
                  Environment.TickCount64 - lastMove > 2500 &&
                  !bar.RectangleToScreen(bar.ClientRectangle).Contains(mouse))
         {
             // The controls get out of the way while a video plays.
-            bar.Visible = false;
+            BarShown = false;
         }
 
         if (sleepAt != null && DateTime.Now >= sleepAt)
@@ -2406,7 +2603,11 @@ internal sealed class VideoPlayerForm : Form
         }
 
         if (!seek.Dragging)
-            seek.Value = shown / duration;
+        {
+            shownBase = shown;
+            shownStamp = Environment.TickCount64;
+            seekDuration = duration;
+        }
 
         UpdateMarks();
 
@@ -2415,6 +2616,32 @@ internal sealed class VideoPlayerForm : Form
         // Remember the position every few seconds.
         if (playing && Environment.TickCount64 - lastSave > 5000)
             SaveProgress();
+    }
+
+    // ---- smooth time bar: ~60 updates a second between the player's coarse readings ----
+    private readonly System.Windows.Forms.Timer smoothTimer = new() { Interval = 16 };
+    private double shownBase;
+    private long shownStamp;
+    private double seekDuration;
+    private double drawn = -1;
+
+    private void SmoothSeek()
+    {
+        if (seek.Dragging || seekDuration <= 0 || !Opened)
+            return;
+
+        double extra = 0;
+
+        if (playing && seekTarget < 0)
+            extra = Math.Min(0.35, (Environment.TickCount64 - shownStamp) / 1000.0 * speed);
+
+        double candidate = shownBase + extra;
+
+        // Never creep backwards by a hair; a real jump (a seek) goes straight there.
+        if (drawn < 0 || Math.Abs(candidate - drawn) > 1.0 || candidate > drawn)
+            drawn = candidate;
+
+        seek.Value = drawn / seekDuration;
     }
 
     private void SaveProgress()
@@ -2694,7 +2921,7 @@ internal sealed class VideoPlayerForm : Form
         else
         {
             fullscreen = false;
-            bar.Visible = true;
+            BarShown = true;
 
             // Back to how it was: usually the maximized "full windowed" mode.
             FormBorderStyle = savedBorder;
@@ -2753,6 +2980,16 @@ internal sealed class VideoPlayerForm : Form
                 return true;
 
             case Keys.Control | Keys.O: OpenFileDialog(); return true;
+
+            case Keys.F5:
+                if (bridged)
+                {
+                    Say("Reloading...");
+                    YtDlp.Forget(Current.Id);
+                    RestartBridge(Pos);
+                }
+
+                return true;
 
             case Keys.Z: CycleFit(); return true;
             case Keys.C: _ = ToggleSubtitlesAsync(); return true;
@@ -2886,7 +3123,7 @@ internal sealed class SeekBar : Control
         {
             double clamped = Math.Clamp(value, 0, 1);
 
-            if (Math.Abs(clamped - this.value) < 0.0005)
+            if (Math.Abs(clamped - this.value) < 0.00001)
                 return;
 
             this.value = clamped;
@@ -2987,7 +3224,7 @@ internal sealed class SeekBar : Control
                 g.FillRectangle(marker, b - 1, mid - 6, 3, 12);
         }
 
-        int x = left + (int)(span * value);
+        float x = (float)(left + span * value);
 
         using Pen fill = new(Theme.Accent, thin)
         {

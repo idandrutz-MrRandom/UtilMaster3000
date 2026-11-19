@@ -101,6 +101,9 @@ internal sealed class TubeSettings
     // How video fills the player: 0 = auto, 1 = fill (crop), 2 = fit (bars).
     public int VideoFit { get; set; }
 
+    /// <summary>How solid the player's control bar is (percent; lower = more see-through).</summary>
+    public int PlayerBarOpacity { get; set; } = 55;
+
     /// <summary>Subtitle language to switch on automatically ("" = off).</summary>
     public string SubtitleLanguage { get; set; } = "";
 

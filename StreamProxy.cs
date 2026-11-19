@@ -358,20 +358,48 @@ internal sealed class StreamProxy : IDisposable
                     request.Headers.TryAddWithoutValidation("Referer", "https://www.youtube.com/");
                 }
 
+                // A request that gets no answer must not hang the picture forever:
+                // give each try a time limit, then ask again.
+                // (Waiting for the answer is limited; so is a download that stops
+                // moving. A slow but steady download is left alone.)
+                using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+                limit.CancelAfter(RequestLimitMs);
+
                 using HttpResponseMessage response = await client.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, token);
+                    request, HttpCompletionOption.ResponseHeadersRead, limit.Token);
 
                 response.EnsureSuccessStatusCode();
 
-                byte[] data = await response.Content.ReadAsByteArrayAsync(token);
+                await using Stream body = await response.Content.ReadAsStreamAsync(limit.Token);
+                using MemoryStream collected = new();
+                byte[] piece = new byte[128 * 1024];
+
+                while (true)
+                {
+                    using CancellationTokenSource idle = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    idle.CancelAfter(RequestLimitMs);
+
+                    int n = await body.ReadAsync(piece, idle.Token);
+
+                    if (n == 0)
+                        break;
+
+                    collected.Write(piece, 0, n);
+                }
+
+                byte[] data = collected.ToArray();
                 Trace?.Invoke($"chunk {from / 1024}K+{data.Length / 1024}K ({MimeFromUrl(target.Url)})");
                 return data;
             }
-            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            catch (Exception ex) when (
+                ex is HttpRequestException or IOException ||
+                (ex is OperationCanceledException && !token.IsCancellationRequested))
             {
                 last = ex;
 
-                if (waited.ElapsedMilliseconds > 25000)
+                Trace?.Invoke($"chunk {from / 1024}K: {(ex is OperationCanceledException ? "no answer in time" : ex.Message)}, asking again");
+
+                if (waited.ElapsedMilliseconds > 45000)
                     throw;
 
                 await Task.Delay(250, token);
@@ -464,6 +492,9 @@ internal sealed class StreamProxy : IDisposable
 
     // How much converted video may wait in memory for the player (a few minutes).
     internal static long ReadAheadBytes = 150L * 1024 * 1024;
+
+    // No answer (or no data) for this long: ask again.
+    private const int RequestLimitMs = 9000;
 
     // Bridges started ahead of time (a quality switch is prepared while the
     // old picture keeps playing), waiting for the player to ask for them.

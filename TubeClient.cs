@@ -1940,6 +1940,9 @@ internal sealed class TubeClient : Form
             () => library.Settings.AutoplayDelay, v => library.Settings.AutoplayDelay = v,
             v => v == 0 ? "at once" : v + " s",
             "How long the end screen waits before the next video starts.\nClick to step through, right-click to go back.");
+        Cycle("", "Player controls see-through", new[] { 25, 40, 55, 70, 85, 100 },
+            () => library.Settings.PlayerBarOpacity, v => library.Settings.PlayerBarOpacity = v, v => v + "% visible",
+            "How solid the bar at the bottom of the video is. It floats over the picture and hides while a video plays.\nLower = more see-through.");
         Cycle("", "Starting volume", new[] { 0, 25, 50, 75, 100 },
             () => library.Settings.DefaultVolume, v => library.Settings.DefaultVolume = v, v => v + "%",
             "The volume each video starts at.");
