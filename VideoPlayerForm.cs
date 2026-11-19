@@ -295,6 +295,10 @@ internal sealed class VideoPlayerForm : Form
 
             if (value)
             {
+                // Not before the player itself is on screen (the Shown handler does that).
+                if (!Visible || barWindow.IsDisposed)
+                    return;
+
                 PlaceBar();
                 barWindow.Show(this);
             }
@@ -596,7 +600,10 @@ internal sealed class VideoPlayerForm : Form
         Shown += (_, _) =>
         {
             PlaceBar();
-            barWindow.Show(this);
+
+            // The mouse-move logic may already have shown it.
+            if (!barWindow.Visible && !barWindow.IsDisposed)
+                barWindow.Show(this);
         };
         FormClosed += (_, _) => barWindow.Close();
 
