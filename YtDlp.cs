@@ -885,6 +885,9 @@ internal static class YtDlp
             args.Add(Path.GetDirectoryName(ffmpeg)!);
         }
 
+        // Your own limit, lowered to the ceiling when you are in another program.
+        rateKb = NetworkLimiter.DownloadLimitKb(rateKb);
+
         if (rateKb > 0)
         {
             args.Add("-r");

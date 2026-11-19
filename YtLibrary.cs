@@ -107,6 +107,9 @@ internal sealed class TubeSettings
     /// <summary>Streams start sharper (1080p) when the connection is fast, gentler when it is not.</summary>
     public bool AutoStreamQuality { get; set; } = true;
 
+    /// <summary>Network ceiling in Mbps while you are in another program (0 = no limit).</summary>
+    public int UnfocusedLimitMbps { get; set; } = 20;
+
     /// <summary>Playlists started from the Playlists page start over after the last video.</summary>
     public bool PlaylistLoop { get; set; }
 
@@ -278,6 +281,7 @@ internal sealed class TubeLibrary
     private TubeLibrary()
     {
         Load();
+        NetworkLimiter.LimitMbps = data.Settings.UnfocusedLimitMbps;
     }
 
     // ---- persistence ----
@@ -1112,6 +1116,8 @@ internal sealed class TubeLibrary
 
     public void SettingsChanged()
     {
+        NetworkLimiter.LimitMbps = Settings.UnfocusedLimitMbps;
+
         Changed();
         EnforceCap();
     }

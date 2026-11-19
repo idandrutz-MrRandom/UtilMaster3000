@@ -2412,6 +2412,10 @@ internal sealed class TubeClient : Form
                 library.Settings.AutoStreamQuality = !library.Settings.AutoStreamQuality;
                 library.SettingsChanged();
             });
+        Cycle("\uE839", "Network limit while I am in another program", new[] { 0, 5, 10, 20, 40 },
+            () => library.Settings.UnfocusedLimitMbps, v => library.Settings.UnfocusedLimitMbps = v,
+            v => v == 0 ? "no limit" : v + " Mbps",
+            "Keeps this app from hogging your Wi-Fi: while another program is in front, the app (video buffering, downloads) stays under this speed.\nBack in the app it goes at full speed. Video plays fine at any of these; HD needs about 5 Mbps.");
         Cycle("", "Downloads at the same time", new[] { 1, 2, 3 },
             () => library.Settings.Parallel, v => library.Settings.Parallel = v, Count,
             "More at once is faster but uses more memory and bandwidth.");

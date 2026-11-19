@@ -170,6 +170,14 @@ internal static class LinkDownloader
             });
         }
 
+        int limitKb = NetworkLimiter.DownloadLimitKb(0);
+
+        if (limitKb > 0)
+        {
+            args.Add("-r");
+            args.Add(limitKb + "K");
+        }
+
         string? ffmpeg = FfmpegRecorder.FindFfmpeg();
 
         if (ffmpeg != null)

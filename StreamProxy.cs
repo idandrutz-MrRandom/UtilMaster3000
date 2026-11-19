@@ -387,6 +387,9 @@ internal sealed class StreamProxy : IDisposable
                         break;
 
                     collected.Write(piece, 0, n);
+
+                    // Under the ceiling while you are in another program.
+                    await NetworkLimiter.ThrottleAsync(n, token);
                 }
 
                 byte[] data = collected.ToArray();
