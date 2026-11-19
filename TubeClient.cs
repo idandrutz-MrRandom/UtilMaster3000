@@ -1947,9 +1947,9 @@ internal sealed class TubeClient : Form
         // ---- downloads ----
         list.AddHeader("Videos and downloads");
 
-        Cycle("", "Video quality (starts at 720p, then climbs)", Qualities,
+        Cycle("", "Video quality", Qualities,
             () => library.Settings.Quality, v => library.Settings.Quality = v, v => v + "p",
-            "Streamed videos start at 720p and climb to 1080p while playing.\nDownloads use this quality. Lower it on a slow connection.");
+            "Streamed videos and downloads use this quality from the start.\nLower it on a slow connection; 1080p looks sharpest.");
         Cycle("", "Downloads at the same time", new[] { 1, 2, 3 },
             () => library.Settings.Parallel, v => library.Settings.Parallel = v, Count,
             "More at once is faster but uses more memory and bandwidth.");

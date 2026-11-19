@@ -508,18 +508,12 @@ internal static class YtDlp
         return plan;
     }
 
-    // Videos start at 720p (or lower if that is what is chosen) and
-    // climb to 1080p+ once they are playing steadily.
-    public static int StartHeight => Math.Min(TubeLibrary.Instance.Settings.Quality, 720);
+    // Streams play at the quality you chose, from the first second.
+    // (Switching to a better stream in the middle of a video froze the
+    // picture in every real test, so there is no mid-play switch.)
+    public static int StartHeight => TubeLibrary.Instance.Settings.Quality;
 
-    public static int UpgradeHeight
-    {
-        get
-        {
-            int q = TubeLibrary.Instance.Settings.Quality;
-            return q >= 720 ? Math.Max(q, 1080) : 0;
-        }
-    }
+    public static int UpgradeHeight => 0;
 
     // After YouTube asks "are you a bot?", background lookups rest a while.
     private static DateTime blockedUntil = DateTime.MinValue;

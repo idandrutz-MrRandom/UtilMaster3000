@@ -182,6 +182,7 @@ internal sealed class VideoPlayerForm : Form
     private int stallRestarts;
     private BridgeSpec? beforeUpgrade;
     private long upgradedAt;
+    private long restartedAt;
     private double bridgeOffset;
     private double bridgeDuration;
     private BridgeSpec? bridgeBase;
@@ -781,6 +782,7 @@ internal sealed class VideoPlayerForm : Form
         DebugLog?.Invoke($"RestartBridge({seconds:0.0}) from: " + string.Join(" < ",
             new System.Diagnostics.StackTrace().GetFrames().Skip(1).Take(4).Select(f => f.GetMethod()?.Name)));
 
+        restartedAt = Environment.TickCount64;
         bridgeOffset = Math.Max(0, seconds);
         media.Source = new Uri(proxy.RegisterBridge(bridgeBase with { StartSeconds = bridgeOffset }));
         ApplySpeed();
@@ -840,19 +842,63 @@ internal sealed class VideoPlayerForm : Form
 
             double at = Pos;
 
-            if (duration > 0 && at > duration - 20)
+            if (duration > 0 && at > duration - 30)
+                return;
+
+            // The better stream is started in the background, a few seconds
+            // ahead of the picture, and fills its buffer while the current
+            // one keeps playing. The switch then costs almost nothing.
+            double switchAt = at + 8;
+
+            BridgeSpec upgraded = new(
+                better.Inputs.Select(x => new BridgeInput(x.Url, x.Headers)).ToList(),
+                switchAt,
+                better.CopyVideo);
+
+            proxy ??= new StreamProxy();
+            string uri = proxy.PrepareBridge(upgraded);
+
+            DebugLog?.Invoke($"upgrade: preparing {better.Height}p to take over at {switchAt:0.0}s");
+
+            if (!await proxy.WaitReadyAsync(uri, 25000))
+            {
+                DebugLog?.Invoke("upgrade: the better stream did not start, staying put");
+                return;
+            }
+
+            // Let the current picture reach the switch point.
+            for (int i = 0; i < 250; i++)
+            {
+                if (IsDisposed || index != target || !bridged || bridgeBase == null)
+                    return;
+
+                if (playing && Pos >= switchAt - 0.15)
+                    break;
+
+                await Task.Delay(40);
+            }
+
+            double now = Pos;
+
+            if (now < switchAt - 1 || now > switchAt + 5)
                 return;
 
             beforeUpgrade = bridgeBase;
-            upgradedAt = Environment.TickCount64;
+            upgradedAt = restartedAt = Environment.TickCount64;
 
-            bridgeBase = new BridgeSpec(
-                better.Inputs.Select(x => new BridgeInput(x.Url, x.Headers)).ToList(),
-                0,
-                better.CopyVideo);
+            bridgeBase = upgraded;
+            bridgeOffset = switchAt;
 
-            DebugLog?.Invoke($"upgrade: {current.Height}p -> {better.Height}p at {at:0.0}s (copyVideo={better.CopyVideo})");
-            RestartBridge(at);
+            DebugLog?.Invoke($"upgrade: {current.Height}p -> {better.Height}p at {now:0.0}s (copyVideo={better.CopyVideo})");
+
+            media.Source = new Uri(uri);
+            ApplySpeed();
+
+            if (playing)
+                media.Play();
+            else
+                media.Pause();
+
             Say("Quality: " + better.Height + "p");
         }
         catch
@@ -1538,6 +1584,10 @@ internal sealed class VideoPlayerForm : Form
         media.IsMuted = false;
         muted = false;
         volumeBar.Value = value;
+
+        // Remembered at once, for this and every later video.
+        TubeLibrary.Instance.Settings.DefaultVolume = (int)Math.Round(value * 100);
+        TubeLibrary.Instance.SettingsChanged();
 
         Say($"Volume {value * 100:0}%");
         UpdateButtons();
@@ -2252,6 +2302,14 @@ internal sealed class VideoPlayerForm : Form
         }
 
         long now = Environment.TickCount64;
+
+        // A new stream is still starting up (seeking inside it takes a few seconds).
+        if (now - restartedAt < 12000)
+        {
+            watchPosition = position;
+            watchSince = now;
+            return;
+        }
 
         if (watchPosition < 0 || position > watchPosition + 0.05 || position < watchPosition - 0.5)
         {

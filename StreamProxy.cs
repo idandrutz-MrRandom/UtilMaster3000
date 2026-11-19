@@ -149,7 +149,8 @@ internal sealed class StreamProxy : IDisposable
 
             if (target.Bridge != null)
             {
-                await ServeBridge(context, target.Bridge);
+                Trace?.Invoke($"bridge request: {context.Request.HttpMethod} range={context.Request.Headers["Range"] ?? "-"} token={token[..6]}");
+                await ServeBridge(context, token, target.Bridge);
                 return;
             }
 
@@ -461,22 +462,79 @@ internal sealed class StreamProxy : IDisposable
         output.Close();
     }
 
-    private async Task ServeBridge(HttpListenerContext context, BridgeSpec spec)
-    {
-        HttpListenerResponse output = context.Response;
-        Process? ffmpeg = null;
+    // How much converted video may wait in memory for the player (a few minutes).
+    internal static long ReadAheadBytes = 150L * 1024 * 1024;
 
-        try
+    // Bridges started ahead of time (a quality switch is prepared while the
+    // old picture keeps playing), waiting for the player to ask for them.
+    private readonly ConcurrentDictionary<string, BridgeRun> prepared = new();
+
+    /// <summary>
+    /// Like RegisterBridge, but the conversion starts right now and keeps
+    /// downloading into a buffer, so the player can switch to it instantly.
+    /// </summary>
+    public string PrepareBridge(BridgeSpec spec)
+    {
+        string uri = RegisterBridge(spec);
+        string token = Path.GetFileNameWithoutExtension(new Uri(uri).AbsolutePath);
+
+        if (targets.TryGetValue(token, out Target? target) && target.Bridge != null)
+        {
+            BridgeRun? run = BridgeRun.Start(target.Bridge, stop.Token);
+
+            if (run != null)
+            {
+                prepared[token] = run;
+
+                // Never asked for (the player moved on): clean it up.
+                _ = Task.Delay(TimeSpan.FromSeconds(90)).ContinueWith(_ =>
+                {
+                    if (prepared.TryRemove(token, out BridgeRun? unused))
+                        unused.Dispose();
+                });
+            }
+        }
+
+        return uri;
+    }
+
+    /// <summary>True once a prepared bridge has its first pictures ready.</summary>
+    public async Task<bool> WaitReadyAsync(string uri, int timeoutMs)
+    {
+        string token = Path.GetFileNameWithoutExtension(new Uri(uri).AbsolutePath);
+
+        if (!prepared.TryGetValue(token, out BridgeRun? run))
+            return false;
+
+        Task finished = await Task.WhenAny(run.FirstOutput.Task, Task.Delay(timeoutMs));
+
+        return finished == run.FirstOutput.Task && run.FirstOutput.Task.Result;
+    }
+
+    // One ffmpeg conversion whose output is read ahead into a queue.
+    private sealed class BridgeRun : IDisposable
+    {
+        private readonly CancellationTokenSource cts;
+        private readonly Process ffmpeg;
+        private long buffered;
+
+        public System.Threading.Channels.Channel<byte[]> Queue { get; } =
+            System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
+
+        public TaskCompletionSource<bool> FirstOutput { get; } = new();
+
+        private BridgeRun(Process process, CancellationToken outer)
+        {
+            ffmpeg = process;
+            cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        }
+
+        public static BridgeRun? Start(BridgeSpec spec, CancellationToken outer)
         {
             string? exe = FfmpegRecorder.FindFfmpeg();
 
-            if (exe == null || context.Request.HttpMethod == "HEAD")
-            {
-                output.StatusCode = exe == null ? 500 : 200;
-                output.ContentType = "video/mp4";
-                output.Close();
-                return;
-            }
+            if (exe == null)
+                return null;
 
             ProcessStartInfo info = new(exe)
             {
@@ -489,46 +547,135 @@ internal sealed class StreamProxy : IDisposable
             foreach (string a in spec.BuildArguments())
                 info.ArgumentList.Add(a);
 
-            ffmpeg = Process.Start(info)!;
-            ChildJob.Add(ffmpeg);
+            Process process = Process.Start(info)!;
+            ChildJob.Add(process);
             Trace?.Invoke("bridge: ffmpeg started");
 
             try
             {
-                ffmpeg.PriorityClass = ProcessPriorityClass.BelowNormal;
+                process.PriorityClass = ProcessPriorityClass.BelowNormal;
             }
             catch
             {
                 // Not important.
             }
 
-            ffmpeg.ErrorDataReceived += (_, e) =>
+            process.ErrorDataReceived += (_, e) =>
             {
                 if (e.Data != null)
                     Trace?.Invoke("ffmpeg: " + e.Data);
             };
-            ffmpeg.BeginErrorReadLine();
+            process.BeginErrorReadLine();
+
+            BridgeRun run = new(process, outer);
+            _ = Task.Run(run.Produce);
+            return run;
+        }
+
+        // ffmpeg downloads at full network speed into the queue while the
+        // player takes what it needs: a slow moment on the network is then
+        // invisible, like in YouTube's own player.
+        private async Task Produce()
+        {
+            try
+            {
+                Stream body = ffmpeg.StandardOutput.BaseStream;
+                byte[] buffer = new byte[128 * 1024];
+                int read;
+                bool first = true;
+
+                while ((read = await body.ReadAsync(buffer, cts.Token)) > 0)
+                {
+                    if (first)
+                    {
+                        first = false;
+                        Trace?.Invoke("bridge: first output bytes");
+                        FirstOutput.TrySetResult(true);
+                    }
+
+                    // Far enough ahead: wait for the player to catch up.
+                    while (Interlocked.Read(ref buffered) > ReadAheadBytes)
+                        await Task.Delay(100, cts.Token);
+
+                    Interlocked.Add(ref buffered, read);
+                    await Queue.Writer.WriteAsync(buffer.AsMemory(0, read).ToArray(), cts.Token);
+                }
+            }
+            catch
+            {
+                // Ends when the player leaves.
+            }
+            finally
+            {
+                FirstOutput.TrySetResult(false);
+                Queue.Writer.TryComplete();
+            }
+        }
+
+        public void Taken(int bytes) => Interlocked.Add(ref buffered, -bytes);
+
+        public CancellationToken Token => cts.Token;
+
+        public void Dispose()
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch
+            {
+                // Already gone.
+            }
+
+            try
+            {
+                if (!ffmpeg.HasExited)
+                    ffmpeg.Kill(true);
+            }
+            catch
+            {
+                // Already finished.
+            }
+
+            ffmpeg.Dispose();
+        }
+    }
+
+    private async Task ServeBridge(HttpListenerContext context, string token, BridgeSpec spec)
+    {
+        HttpListenerResponse output = context.Response;
+        BridgeRun? run = null;
+
+        try
+        {
+            if (context.Request.HttpMethod == "HEAD" || FfmpegRecorder.FindFfmpeg() == null)
+            {
+                output.StatusCode = FfmpegRecorder.FindFfmpeg() == null ? 500 : 200;
+                output.ContentType = "video/mp4";
+                output.Close();
+                return;
+            }
+
+            // A prepared one is already running (and buffered); otherwise start now.
+            if (!prepared.TryRemove(token, out run))
+                run = BridgeRun.Start(spec, stop.Token);
+
+            if (run == null)
+            {
+                output.StatusCode = 500;
+                output.Close();
+                return;
+            }
 
             output.StatusCode = 200;
             output.ContentType = "video/mp4";
             output.SendChunked = true;
 
-            Stream body = ffmpeg.StandardOutput.BaseStream;
-            byte[] buffer = new byte[64 * 1024];
-            int read;
-
-            bool firstOut = true;
-
-            while ((read = await body.ReadAsync(buffer, stop.Token)) > 0)
+            await foreach (byte[] piece in run.Queue.Reader.ReadAllAsync(run.Token))
             {
-                if (firstOut)
-                {
-                    firstOut = false;
-                    Trace?.Invoke("bridge: first output bytes");
-                }
-
-                await output.OutputStream.WriteAsync(buffer.AsMemory(0, read), stop.Token);
-                await output.OutputStream.FlushAsync(stop.Token);
+                run.Taken(piece.Length);
+                await output.OutputStream.WriteAsync(piece, run.Token);
+                await output.OutputStream.FlushAsync(run.Token);
             }
 
             output.Close();
@@ -547,26 +694,16 @@ internal sealed class StreamProxy : IDisposable
         finally
         {
             // The player left (seek, stop, close): end the conversion.
-            if (ffmpeg != null)
-            {
-                try
-                {
-                    if (!ffmpeg.HasExited)
-                        ffmpeg.Kill(true);
-                }
-                catch
-                {
-                    // Already finished.
-                }
-
-                ffmpeg.Dispose();
-            }
+            run?.Dispose();
         }
     }
 
     public void Dispose()
     {
         stop.Cancel();
+
+        foreach (BridgeRun run in prepared.Values)
+            run.Dispose();
 
         try
         {
