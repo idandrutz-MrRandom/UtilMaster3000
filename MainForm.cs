@@ -125,7 +125,7 @@ public sealed partial class MainForm : Form
         new(9, "", "Style", targetPage: "Style"),
         new(10, "", "Setup", targetPage: "Setup"),
         new(11, "", "About", targetPage: "About"),
-        new(12, "", "System", targetPage: "System")
+        new(12, "", "System", targetPage: "System"),
     };
 
     private readonly List<LauncherRow> visibleRows = new();
@@ -168,6 +168,7 @@ public sealed partial class MainForm : Form
 
         trackTimer.Tick += (_, _) => TrackForeground();
         trackTimer.Start();
+        SetupFlyouts();
 
         StartupManager.MigrateLegacy();
 
@@ -331,6 +332,7 @@ public sealed partial class MainForm : Form
 
     private void HideToTray(bool animate = true)
     {
+        CloseFlyout();
         CancelShortcutBinding();
 
         if (!animate || !Visible || !IsHandleCreated)
@@ -440,7 +442,9 @@ public sealed partial class MainForm : Form
     // Where Back / Esc / Left go from the current page.
     private string ParentPage() =>
         currentPage == "VaultEntry" ? "Vault" :
-        currentPage == "TextTool" ? "Text" : "home";
+        currentPage == "TextTool" ? "Text" :
+        currentPage == "MacroEntry" ? "Macros" :
+        currentPage == "MacroStep" ? "MacroEntry" : "home";
 
     private void RefreshPage()
     {
@@ -557,7 +561,8 @@ public sealed partial class MainForm : Form
         {
             int count = displayedEntries.Count;
 
-            if (count <= MaxRows)
+            // While a menu slides out, the bar is the curtain's edge.
+            if (count <= MaxRows || flyoutCurtain)
                 return;
 
             int height = rowsPanel.Height;
@@ -589,6 +594,7 @@ public sealed partial class MainForm : Form
 
     private void ShowPage(string page, bool keepSelection = false)
     {
+        CloseFlyout();
         updatingMenu = true;
 
         currentPage = page;
@@ -608,6 +614,10 @@ public sealed partial class MainForm : Form
             "Find" => "Search files and open windows...",
             "Clipboard" => "Search clipboard history...",
             "TextTool" => $"{textToolName}: type or paste text...",
+            "Macros" => "Search macros...",
+            "MacroEntry" => "Filter steps, or type a new name to rename...",
+            "MacroStep" => "Type x,y to set the position, or a time like 250 or 1.5s...",
+            "Auto" => "Type a number to set the click speed (250, 0.5s, 2 min)...",
             "Calc" => "Calculate: 5squared, 3root(27), sin(30deg), 20% of 150...",
             _ => "Go..."
         };

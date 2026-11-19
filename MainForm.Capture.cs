@@ -69,7 +69,11 @@ public sealed partial class MainForm
         {
             IsEnabled = id => id == "clipboard"
                 ? settings.ClipboardWinV
-                : settings.PrintScreenKeys
+                : id == "autoclick"
+                    ? settings.AcHotkeyOn
+                    : id.StartsWith("macro-")
+                        ? settings.MacroHotkeysOn
+                        : settings.PrintScreenKeys
         };
 
         ApplyShortcuts();
@@ -121,6 +125,18 @@ public sealed partial class MainForm
                     ShowPage("Clipboard");
                     OpenLauncher();
                 }
+                break;
+
+            case "autoclick":
+                ToggleAutoClick();
+                break;
+
+            case "macro-record":
+                ToggleMacroRecording();
+                break;
+
+            case "macro-play":
+                PlayMacro(null);
                 break;
 
             case "shot-area":

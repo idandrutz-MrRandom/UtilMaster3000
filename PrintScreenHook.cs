@@ -46,7 +46,10 @@ internal static class ShortcutCatalog
         new("shot-window", "Screenshot: active window", Alt, PrintScreen),
         new("rec-area", "Record: choose area", Shift, PrintScreen),
         new("rec-full", "Record: full screen", Ctrl | Shift, PrintScreen),
-        new("clipboard", "Clipboard history", Win, 0x56)
+        new("clipboard", "Clipboard history", Win, 0x56),
+        new("autoclick", "Autoclicker: start / stop", 0, 0x75),
+        new("macro-record", "Macro: record / stop", 0, 0x78),
+        new("macro-play", "Macro: play / stop", 0, 0x79)
     };
 
     public static ShortcutBinding Get(AppSettings settings, Info info) =>

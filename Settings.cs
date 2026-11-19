@@ -36,6 +36,9 @@ internal sealed class AppSettings
 
     public bool HideOnFocusLoss { get; set; }
 
+    /// <summary>Menus slide out beside the launcher when you rest the mouse on them.</summary>
+    public bool HoverSubmenus { get; set; } = true;
+
     // Global shortcut that opens the launcher (default Ctrl + Alt + U).
     public uint LauncherHotkeyModifiers { get; set; } = MOD_CONTROL | MOD_ALT;
     public int LauncherHotkeyKey { get; set; } = (int)Keys.U;
@@ -67,6 +70,25 @@ internal sealed class AppSettings
     // Screen recordings (MP4) also capture the sound the PC is playing.
     public bool RecordSound { get; set; } = true;
     public bool CalcDegrees { get; set; }
+
+    // Autoclicker
+    public bool AcHotkeyOn { get; set; } = true;
+    public int AcIntervalMs { get; set; } = 100;
+    public int AcJitterPercent { get; set; }
+    public int AcButton { get; set; }
+    public bool AcDouble { get; set; }
+    public bool AcFixedPoint { get; set; }
+    public int AcX { get; set; }
+    public int AcY { get; set; }
+    public int AcRepeat { get; set; }
+    public int AcStartDelayMs { get; set; }
+
+    // Macros
+    public bool MacroHotkeysOn { get; set; } = true;
+    public int MacroRepeat { get; set; } = 1;
+    public int MacroSpeedPercent { get; set; } = 100;
+    public bool MacroRecordMoves { get; set; } = true;
+    public string LastMacro { get; set; } = "";
 
     // A finished recording is also put on the clipboard (and its history).
     public bool RecordToClipboard { get; set; } = true;

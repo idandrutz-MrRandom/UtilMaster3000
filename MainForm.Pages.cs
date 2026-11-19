@@ -224,6 +224,17 @@ public sealed partial class MainForm
                 new MenuEntry(0, "", $"Hold to open menu: {HoldLabel()}", command: "hold"),
                 new MenuEntry(0, "", $"Live conversion: {OnOff(translator.Enabled)}", command: "toggle"),
                 new MenuEntry(0, "", $"Hide on focus loss: {OnOff(settings.HideOnFocusLoss)}", command: "focus-hide"),
+                new MenuEntry(0, "\uE700", $"Slide-out menus on hover: {OnOff(settings.HoverSubmenus)}",
+                    run: () =>
+                    {
+                        settings.HoverSubmenus = !settings.HoverSubmenus;
+                        SaveSettings();
+                        CloseFlyout();
+                        RefreshPage();
+                    },
+                    expandText: $"Slide-out menus on hover: {OnOff(settings.HoverSubmenus)}" + NL +
+                                "Rest the mouse on a row that opens a menu and that menu slides out beside the launcher." + NL +
+                                "Click what you want straight away. Turn this off to open menus by clicking only."),
                 new MenuEntry(0, "", $"Start with Windows: {OnOff(StartupManager.IsEnabled())}", command: "startup"),
                 new MenuEntry(0, "", $"Web search: {SearchEngines[EngineIndex()].Name}", command: "engine"),
                 new MenuEntry(0, "", "Reset settings", command: "reset"),
@@ -525,6 +536,10 @@ public sealed partial class MainForm
         List<MenuEntry> list = new()
         {
             Act("\uE714", "UtilTube  (YouTube, offline)", () => OpenTube(null)),
+
+            new MenuEntry(0, "\uE8EF", "Calculator", targetPage: "Calc"),
+            new MenuEntry(0, "\uE962", "Autoclicker", targetPage: "Auto"),
+            new MenuEntry(0, "\E768", "Macros", targetPage: "Macros"),
 
             Act("", "Pin last window on top", PinLastWindow),
 
@@ -1240,6 +1255,10 @@ public sealed partial class MainForm
             "Shortcuts" => ShortcutsPage(query),
             "TextTool" => TextToolPage(query),
             "Calc" => CalcPage(query),
+            "Auto" => AutoClickPage(query),
+            "Macros" => MacrosPage(query),
+            "MacroEntry" => MacroEntryPage(query),
+            "MacroStep" => MacroStepPage(query),
             "Vault" => VaultPage(query),
             "VaultEntry" => VaultEntryPage(),
             _ => FilterStatic(query)
@@ -1386,6 +1405,10 @@ public sealed partial class MainForm
         }
 
         list.AddRange(AppIndex.Search(query, 5).Select(AppRow));
+
+        if (pages.TryGetValue("Tools", out List<MenuEntry>? toolEntries))
+            list.AddRange(toolEntries.Where(e => e.targetPage != null &&
+                e.Label.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
         list.AddRange(mainEntries.Where(e =>
             e.Label.Contains(query, StringComparison.OrdinalIgnoreCase)));
