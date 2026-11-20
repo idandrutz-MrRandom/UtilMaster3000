@@ -340,8 +340,9 @@ public sealed partial class MainForm : Form
 
     private void ToggleLauncher()
     {
-        // While recording, the launcher shortcut stops the recording.
-        if (IsRecording)
+        // While recording, the launcher shortcut stops the recording, unless
+        // the setting lets the menu open during a recording.
+        if (IsRecording && !settings.MenuWhileRecording)
         {
             StopRecording();
             return;
@@ -1504,7 +1505,9 @@ public sealed partial class MainForm : Form
         }
         else if (m.Msg == WM_CLIPBOARDUPDATE)
         {
-            BeginInvoke(new Action(RecordClipboard));
+            // Not read on the spot: the app that copied often still has the
+            // clipboard open, and waiting for it would freeze the launcher.
+            BeginInvoke(new Action(() => ScheduleClipboardRecord(30, true)));
         }
 
         base.WndProc(ref m);
@@ -1532,6 +1535,7 @@ public sealed partial class MainForm : Form
         trackTimer.Stop();
         trackTimer.Dispose();
         countdown?.Dispose();
+        clipboardTimer?.Dispose();
 
         if (IsRecording)
             StopRecording();

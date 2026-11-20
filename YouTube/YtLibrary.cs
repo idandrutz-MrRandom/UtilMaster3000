@@ -113,6 +113,12 @@ internal sealed class TubeSettings
     /// <summary>Network ceiling in Mbps while you are in another program (0 = no limit).</summary>
     public int UnfocusedLimitMbps { get; set; } = 20;
 
+    /// <summary>
+    /// Saving videos waits while a game or other fullscreen program is in front, so
+    /// downloads do not push your ping up. Carries on when you leave it.
+    /// </summary>
+    public bool PauseDownloadsInGames { get; set; } = true;
+
     /// <summary>Playlists started from the Playlists page start over after the last video.</summary>
     public bool PlaylistLoop { get; set; }
 
@@ -285,6 +291,7 @@ internal sealed class TubeLibrary
     {
         Load();
         NetworkLimiter.LimitMbps = data.Settings.UnfocusedLimitMbps;
+        NetworkLimiter.PauseInFullscreen = data.Settings.PauseDownloadsInGames;
     }
 
     // ---- persistence ----
@@ -1120,6 +1127,7 @@ internal sealed class TubeLibrary
     public void SettingsChanged()
     {
         NetworkLimiter.LimitMbps = Settings.UnfocusedLimitMbps;
+        NetworkLimiter.PauseInFullscreen = Settings.PauseDownloadsInGames;
 
         Changed();
         EnforceCap();
@@ -1157,8 +1165,11 @@ internal sealed class TubeLibrary
             TubeVideo? video = null;
 
             // A video loading for playback comes first: saving waits until it has what it needs.
-            if (index < Settings.Parallel && !Paused && YtDlp.IsInstalled && !StreamProxy.StreamIsLoading)
+            if (index < Settings.Parallel && !Paused && YtDlp.IsInstalled &&
+                !StreamProxy.StreamIsLoading && !NetworkLimiter.DownloadsHeld)
+            {
                 video = TakeNext();
+            }
 
             if (video == null)
             {
@@ -1231,7 +1242,8 @@ internal sealed class TubeLibrary
                 {
                     await Task.Delay(400, yieldCts.Token);
 
-                    if (StreamProxy.StreamIsLoading)
+                    // Also steps aside while a game is in front: the part already saved stays.
+                    if (StreamProxy.StreamIsLoading || NetworkLimiter.DownloadsHeld)
                     {
                         yielded = true;
                         yieldCts.Cancel();

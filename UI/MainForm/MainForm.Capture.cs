@@ -122,6 +122,8 @@ public sealed partial class MainForm
                 }
                 else
                 {
+                    // What was just copied is in the list when it opens.
+                    FlushClipboardRecord();
                     ShowPage("Clipboard");
                     OpenLauncher();
                 }
@@ -481,6 +483,14 @@ public sealed partial class MainForm
             $"Finished recordings go to the clipboard: {OnOff(settings.RecordToClipboard)}", () =>
             {
                 settings.RecordToClipboard = !settings.RecordToClipboard;
+                SaveSettings();
+                RefreshPage();
+            }));
+
+        list.Add(Act("",
+            $"Menu opens while recording: {OnOff(settings.MenuWhileRecording)}", () =>
+            {
+                settings.MenuWhileRecording = !settings.MenuWhileRecording;
                 SaveSettings();
                 RefreshPage();
             }));

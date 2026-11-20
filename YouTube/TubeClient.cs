@@ -2416,10 +2416,13 @@ internal sealed class TubeClient : Form
             () => library.Settings.UseChromeCookiesForStreaming,
             v => library.Settings.UseChromeCookiesForStreaming = v,
             "Last resort only: if UtilTube's account and anonymous stream lookups fail, yt-dlp may read Chrome's local cookies for YouTube. Off by default.");
-        Cycle("\uE839", "Network limit while I am in another program", new[] { 0, 5, 10, 20, 40 },
+        Cycle("\uE839", "Network limit while I am in another program", new[] { -1, 1, 2, 5, 10, 20, 40, 0 },
             () => library.Settings.UnfocusedLimitMbps, v => library.Settings.UnfocusedLimitMbps = v,
-            v => v == 0 ? "no limit" : v + " Mbps",
-            "Keeps this app from hogging your Wi-Fi: while another program is in front, the app (video buffering, downloads) stays under this speed.\nBack in the app it goes at full speed. Video plays fine at any of these; HD needs about 5 Mbps.");
+            v => v < 0 ? "pause downloads" : v == 0 ? "no limit" : v + " Mbps",
+            "Keeps this app from hogging your connection: while another program is in front, the app (video buffering, downloads) stays under this speed.\n\"Pause downloads\" stops saving videos completely until you are back in the app.\nBack in the app it goes at full speed. Video plays fine at any speed; HD needs about 5 Mbps.");
+        Toggle("\uE7FC", "Pause downloads while I am in a game", () => library.Settings.PauseDownloadsInGames,
+            v => library.Settings.PauseDownloadsInGames = v,
+            "While a game or any other fullscreen program is in front, saving videos stops, so downloads cannot push your ping up. They carry on where they stopped when you leave it.");
         Cycle("", "Downloads at the same time", new[] { 1, 2, 3 },
             () => library.Settings.Parallel, v => library.Settings.Parallel = v, Count,
             "More at once is faster but uses more memory and bandwidth.");

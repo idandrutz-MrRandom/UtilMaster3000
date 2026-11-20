@@ -16,7 +16,10 @@ namespace UtilMaster3000;
 
 internal static class NetworkLimiter
 {
-    /// <summary>The ceiling in megabits per second while unfocused (0 = no limit).</summary>
+    /// <summary>
+    /// The ceiling in megabits per second while unfocused (0 = no limit,
+    /// negative = saving videos waits until you are back in the app).
+    /// </summary>
     public static int LimitMbps { get; set; } = 20;
 
     /// <summary>Tests: pretend the app is (true) or is not (false) in front.</summary>
@@ -30,12 +33,74 @@ internal static class NetworkLimiter
 
     private static long checkedAt;
     private static bool foreground = true;
+    private static bool otherFullscreen;
+
+    /// <summary>
+    /// Saving videos stops while another program fills the whole screen (a game, a
+    /// film) and carries on afterwards. A download keeps a line busy, and that is
+    /// what pushes your ping up in a game.
+    /// </summary>
+    public static bool PauseInFullscreen { get; set; } = true;
+
+    /// <summary>
+    /// True while downloads must wait: you chose "pause" for other programs, or a
+    /// fullscreen program is in front. (Video you are watching is never held.)
+    /// </summary>
+    public static bool DownloadsHeld
+    {
+        get
+        {
+            if (AppInFront)
+                return false;
+
+            return LimitMbps < 0 || (PauseInFullscreen && otherFullscreen);
+        }
+    }
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr window, int index);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, System.Text.StringBuilder text, int max);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    // A window with no title bar that covers its whole screen, and is not the desktop.
+    private static bool IsFullscreen(IntPtr window)
+    {
+        const int GWL_STYLE = -16;
+        const int WS_CAPTION = 0xC00000;
+
+        if (!GetWindowRect(window, out Rect r))
+            return false;
+
+        if ((GetWindowLong(window, GWL_STYLE) & WS_CAPTION) == WS_CAPTION)
+            return false;
+
+        System.Text.StringBuilder name = new(64);
+        GetClassName(window, name, name.Capacity);
+
+        if (name.ToString() is "Progman" or "WorkerW" or "Shell_TrayWnd")
+            return false;
+
+        System.Drawing.Rectangle screen = System.Windows.Forms.Screen.FromHandle(window).Bounds;
+
+        return r.Left <= screen.Left && r.Top <= screen.Top &&
+               r.Right >= screen.Right && r.Bottom >= screen.Bottom;
+    }
 
     /// <summary>True while one of the app's own windows is in front.</summary>
     public static bool AppInFront
@@ -60,16 +125,19 @@ internal static class NetworkLimiter
                 if (window == IntPtr.Zero)
                 {
                     foreground = false;
+                    otherFullscreen = false;
                 }
                 else
                 {
                     GetWindowThreadProcessId(window, out uint pid);
                     foreground = pid == (uint)Environment.ProcessId;
+                    otherFullscreen = !foreground && IsFullscreen(window);
                 }
             }
             catch
             {
                 foreground = true;
+                otherFullscreen = false;
             }
 
             return foreground;

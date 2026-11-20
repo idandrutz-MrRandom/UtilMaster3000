@@ -145,6 +145,10 @@ internal sealed class AppSettings
     // A finished recording is also put on the clipboard (and its history).
     public bool RecordToClipboard { get; set; } = true;
 
+    // While a screen recording runs, the launcher shortcut opens the menu
+    // (true) instead of stopping the recording (false, the old behaviour).
+    public bool MenuWhileRecording { get; set; }
+
     // Clipboard history: false = left click pastes, right click opens a
     // picture / video in the player. true = the other way round.
     public bool ClipboardLeftOpens { get; set; }

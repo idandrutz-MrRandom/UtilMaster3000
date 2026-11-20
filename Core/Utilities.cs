@@ -88,6 +88,16 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool RemoveClipboardFormatListener(IntPtr window);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool OpenClipboard(IntPtr owner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool CloseClipboard();
+
+    // Changes with every change of the clipboard's content.
+    [DllImport("user32.dll")]
+    public static extern uint GetClipboardSequenceNumber();
+
     [DllImport("kernel32.dll")]
     public static extern uint SetThreadExecutionState(uint flags);
 

@@ -78,7 +78,13 @@ public sealed partial class MainForm
     }
 
     private readonly List<ClipItem> clipboardHistory = new();
-    private long ignoreClipboardUntil;
+
+    // The clipboard's change counter right after the launcher itself put a picture
+    // or files there, so those changes are not recorded again.
+    private uint ownClipboardSequence;
+
+    private System.Windows.Forms.Timer? clipboardTimer;
+    private int clipboardTries;
     private bool clipboardPaused;
 
     private bool keepAwake;
@@ -843,10 +849,70 @@ public sealed partial class MainForm
     private const int MaxClipImages = 8;
     private const int MaxImageBytes = 12 * 1024 * 1024;
 
+    // Reads the clipboard a moment after it changed, and never waits for another
+    // program to let go of it: if it is still busy the read is simply tried again
+    // shortly. (Reading it straight away made the launcher freeze for up to a
+    // second whenever you copied and then opened it or pasted quickly.)
+    private void ScheduleClipboardRecord(int delayMs, bool fresh)
+    {
+        if (IsDisposed)
+            return;
+
+        if (fresh)
+            clipboardTries = 0;
+
+        if (clipboardTimer == null)
+        {
+            clipboardTimer = new System.Windows.Forms.Timer();
+
+            clipboardTimer.Tick += (_, _) =>
+            {
+                clipboardTimer!.Stop();
+                RecordClipboardWhenFree();
+            };
+        }
+
+        clipboardTimer.Stop();
+        clipboardTimer.Interval = Math.Max(1, delayMs);
+        clipboardTimer.Start();
+    }
+
+    // Records right now what is waiting to be recorded (a copy that was just made).
+    private void FlushClipboardRecord()
+    {
+        if (clipboardTimer is { Enabled: true })
+        {
+            clipboardTimer.Stop();
+            RecordClipboardWhenFree();
+        }
+    }
+
+    private void RecordClipboardWhenFree()
+    {
+        if (IsDisposed)
+            return;
+
+        bool free = Native.OpenClipboard(IntPtr.Zero);
+
+        if (free)
+            Native.CloseClipboard();
+
+        if (!free)
+        {
+            // Another program holds it: try again in a moment (for about 2 s).
+            if (++clipboardTries < 40)
+                ScheduleClipboardRecord(50, false);
+
+            return;
+        }
+
+        RecordClipboard();
+    }
+
     private void RecordClipboard()
     {
         if (clipboardPaused || IsDisposed ||
-            Environment.TickCount64 < ignoreClipboardUntil)
+            Native.GetClipboardSequenceNumber() == ownClipboardSequence)
         {
             return;
         }
@@ -1075,8 +1141,8 @@ public sealed partial class MainForm
                     DataObject data = new();
                     data.SetImage(copy);
 
-                    ignoreClipboardUntil = Environment.TickCount64 + 900;
                     Clipboard.SetDataObject(data, true, 5, 100);
+                    ownClipboardSequence = Native.GetClipboardSequenceNumber();
                     return true;
                 }
 
@@ -1099,8 +1165,8 @@ public sealed partial class MainForm
                     DataObject data = new();
                     data.SetFileDropList(existing);
 
-                    ignoreClipboardUntil = Environment.TickCount64 + 900;
                     Clipboard.SetDataObject(data, true, 5, 100);
+                    ownClipboardSequence = Native.GetClipboardSequenceNumber();
                     return true;
                 }
 
@@ -1252,18 +1318,39 @@ public sealed partial class MainForm
             iconBitmap: item.Thumb);
     }
 
+    // Gives the keyboard back to the window you came from and pastes the moment it
+    // has it (usually a few milliseconds), instead of waiting a fixed third of a second.
     private void PasteIntoPrevious()
     {
-        After(260, () =>
-        {
-            if (lastExternalWindow != IntPtr.Zero &&
-                Native.IsWindow(lastExternalWindow))
-            {
-                Native.SetForegroundWindow(lastExternalWindow);
-            }
+        IntPtr target = lastExternalWindow;
+        bool known = target != IntPtr.Zero && Native.IsWindow(target);
 
-            After(80, SystemTools.SendPaste);
-        });
+        if (known)
+            Native.SetForegroundWindow(target);
+
+        Stopwatch waited = Stopwatch.StartNew();
+        System.Windows.Forms.Timer poll = new() { Interval = 10 };
+
+        poll.Tick += (_, _) =>
+        {
+            IntPtr front = Native.GetForegroundWindow();
+
+            bool ready = known
+                ? front == target
+                : front != IntPtr.Zero && front != Handle;
+
+            // Never wait long: some windows refuse to come forward.
+            if (!ready && waited.ElapsedMilliseconds < 400)
+                return;
+
+            poll.Stop();
+            poll.Dispose();
+
+            // A short settle so the window is ready for keys.
+            After(30, SystemTools.SendPaste);
+        };
+
+        poll.Start();
     }
 
     // --------------------------------------------------
