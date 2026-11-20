@@ -165,6 +165,7 @@ public sealed partial class MainForm : Form
 
         uiTimer.Tick += UiTick;
         holdTimer.Tick += HoldTick;
+        keyboardTimer.Tick += KeyboardRetryTick;
 
         trackTimer.Tick += (_, _) => TrackForeground();
         trackTimer.Start();
@@ -312,10 +313,86 @@ public sealed partial class MainForm : Form
 
         WindowState = FormWindowState.Normal;
 
+        // Typing must land in the search box, whatever state a hotkey or a paste
+        // left things in: nothing may still be swallowing keys, and the box is on.
+        if (bindingSlot != null)
+            CancelHotkeyBinding();
+
+        CancelShortcutBinding();
+        searchBox.Enabled = true;
+
+        if (pressActive && (Native.GetAsyncKeyState((int)toggleKey.Key) & 0x8000) == 0)
+        {
+            pressActive = false;
+            holdTimer.Stop();
+        }
+
         Activate();
         BringToFront();
+        TakeKeyboard();
 
         searchBox.Focus();
+
+        // Windows sometimes refuses the first attempt (another window was handed the
+        // keyboard a moment ago, e.g. right after a paste): try again a few times.
+        keyboardRetries = 6;
+        keyboardTimer.Start();
+    }
+
+    private readonly System.Windows.Forms.Timer keyboardTimer = new() { Interval = 60 };
+    private int keyboardRetries;
+
+    private void KeyboardRetryTick(object? sender, EventArgs e)
+    {
+        if (IsDisposed || !Visible || hiding || --keyboardRetries < 0)
+        {
+            keyboardTimer.Stop();
+            return;
+        }
+
+        if (Native.GetForegroundWindow() == Handle)
+        {
+            if (!searchBox.Focused)
+                searchBox.Focus();
+
+            keyboardTimer.Stop();
+            return;
+        }
+
+        TakeKeyboard();
+        searchBox.Focus();
+    }
+
+    // Brings the launcher to the front with the keyboard, even when Windows would
+    // normally keep another program in front (it joins that program's input
+    // for a moment, which is what allows the switch).
+    private void TakeKeyboard()
+    {
+        if (!IsHandleCreated)
+            return;
+
+        IntPtr front = Native.GetForegroundWindow();
+
+        if (front == Handle)
+            return;
+
+        uint frontThread = front == IntPtr.Zero
+            ? 0
+            : Native.GetWindowThreadProcessId(front, out _);
+
+        uint mine = Native.GetCurrentThreadId();
+        bool joined = frontThread != 0 && frontThread != mine &&
+                      Native.AttachThreadInput(mine, frontThread, true);
+
+        try
+        {
+            Native.SetForegroundWindow(Handle);
+        }
+        finally
+        {
+            if (joined)
+                Native.AttachThreadInput(mine, frontThread, false);
+        }
     }
 
     /// <summary>The program was started a second time: show this copy's launcher.</summary>
@@ -1318,6 +1395,11 @@ public sealed partial class MainForm : Form
     {
         // The shortcut is still held after a long press opened the menu:
         // swallow its auto-repeat so it does not reach the search box.
+        // (Only while the hold timer is really watching that key: a flag left set by
+        // mistake must never swallow what you type.)
+        if (pressActive && !holdTimer.Enabled)
+            pressActive = false;
+
         if (pressActive)
             return true;
 
@@ -1532,6 +1614,8 @@ public sealed partial class MainForm : Form
         uiTimer.Dispose();
         holdTimer.Stop();
         holdTimer.Dispose();
+        keyboardTimer.Stop();
+        keyboardTimer.Dispose();
         trackTimer.Stop();
         trackTimer.Dispose();
         countdown?.Dispose();

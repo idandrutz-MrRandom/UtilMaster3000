@@ -60,6 +60,12 @@ internal static class Native
     public static extern bool SetForegroundWindow(IntPtr window);
 
     [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint thread, uint attachTo, bool attach);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr window, int command);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
