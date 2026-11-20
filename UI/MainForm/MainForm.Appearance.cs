@@ -52,6 +52,8 @@ public sealed partial class MainForm
 
         Theme.FrameChanged += OnBackgroundFrame;
         Theme.LoadBackground(settings.BackgroundPath);
+        FitSearchBar();
+        ApplySearchBarColors();
 
         menuBox.Invalidate(true);
     }
@@ -99,6 +101,7 @@ public sealed partial class MainForm
         SetScaledFont(breadcrumb, 11f, FontStyle.Bold);
         SetScaledFont(searchBox, 9f);
         SetScaledFont(statusLabel, 8f);
+        FitSearchBar();
 
         foreach (LauncherRow row in visibleRows)
             row.ApplyAppearance();
@@ -117,17 +120,7 @@ public sealed partial class MainForm
             Theme.LoadBackground(settings.BackgroundPath);
 
         menuBox.BackColor = Theme.Background;
-        Color searchBarColor = settings.TopBarBackgroundEnabled
-            ? Theme.SearchBar
-            : Theme.Search;
-        int searchBarOpacity = settings.TopBarBackgroundEnabled
-            ? Theme.SearchBarOpacityPercent
-            : 100;
-        searchBackground.BackColor = Color.FromArgb(
-            searchBarOpacity * 255 / 100,
-            searchBarColor);
-        searchBox.BackColor = searchBarColor;
-        searchBox.ForeColor = Theme.Strong;
+        ApplySearchBarColors();
         searchBackground.Invalidate();
         searchBox.Invalidate();
 
@@ -142,6 +135,44 @@ public sealed partial class MainForm
 
         // Rebuild the rows so they pick up the new colours / transparency.
         RefreshPage();
+
+        studio?.OnApplied();
+    }
+
+    // The bar is as tall as its text (plus an even margin) and the text sits in the
+    // middle of it. The text box is exactly one line high, so a fixed 28 px bar left
+    // the text pinned to the top.
+    private void FitSearchBar()
+    {
+        int bar = Math.Max(24, searchBox.Height + 12);
+
+        searchExtra = bar - 28;
+        searchBackground.Height = bar;
+        searchBox.Top = (bar - searchBox.Height) / 2;
+        rowsPanel.Top = 50 + searchExtra;
+    }
+
+    // The search bar is one flat colour all over. (A semi-transparent panel with
+    // a text box on top looked uneven: the text box cannot be see-through.)
+    private void ApplySearchBarColors()
+    {
+        Color barColor = settings.TopBarBackgroundEnabled ? Theme.SearchBar : Theme.Search;
+        int percent = settings.TopBarBackgroundEnabled ? Theme.SearchBarOpacityPercent : 100;
+
+        Size layout = new(Theme.MenuWidth, Chrome + MaxRows * Theme.RowHeight);
+
+        Color behind = percent >= 100
+            ? Theme.Background
+            : Theme.AverageBehind(
+                new Rectangle(searchBackground.Location, searchBackground.Size), layout);
+
+        Color flat = percent >= 100
+            ? barColor
+            : Theme.Mix(behind, barColor, percent / 100f);
+
+        searchBackground.BackColor = flat;
+        searchBox.BackColor = flat;
+        searchBox.ForeColor = Theme.Strong;
     }
 
     private static void SetScaledFont(Control control, float baseSize, FontStyle style = FontStyle.Regular)
@@ -172,6 +203,26 @@ public sealed partial class MainForm
 
     private const string CycleHint = "Click = next value, right-click = previous.";
 
+    // An icon for each kind of value row (Segoe MDL2 Assets glyphs).
+    private static readonly (string Name, string Glyph)[] StyleGlyphs =
+    {
+        ("Search bar own", "\uE932"), ("Search bar visible", "\uE71E"), ("Brightness", "\uE706"),
+        ("Menu width", "\uE9A6"), ("Row height", "\uECA5"), ("Corner", "\uE7C8"),
+        ("Border", "\uE9D4"), ("Menu visible", "\uE7B3"), ("Animation", "\uEB9D"),
+        ("Font size", "\uE8E9"), ("Fit", "\uE9A6"), ("Position", "\uE8A9"), ("Strength", "\uE9E9")
+    };
+
+    private static string StyleGlyph(string label)
+    {
+        foreach ((string name, string glyph) in StyleGlyphs)
+        {
+            if (label.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+                return glyph;
+        }
+
+        return "\uE713";
+    }
+
     private MenuEntry StyleCycle<T>(
         string label, T[] values, Func<T> get, Action<T> set,
         Func<T, string> format, string tip, Image? icon = null)
@@ -194,7 +245,7 @@ public sealed partial class MainForm
 
         string text = $"{label}: {format(get())}";
 
-        return new MenuEntry(0, "", text,
+        return new MenuEntry(0, StyleGlyph(label), text,
             run: () => Step(1), runAlt: () => Step(-1), iconBitmap: icon,
             expandText: text + NL + tip + NL + CycleHint);
     }
@@ -277,16 +328,20 @@ public sealed partial class MainForm
     {
         List<MenuEntry> list = new()
         {
+            new MenuEntry(0, "\uE771", "Style editor (sliders, colours, preview)...", run: OpenStudio,
+                expandText: "Opens one window with every look setting: theme tiles, colour pickers that " +
+                    "update this menu while you drag, sliders and the background picture. " +
+                    "The lists below do the same one value at a time."),
             ThemeRow(),
-            new MenuEntry(0, "", "Colours...", targetPage: "StyleColours"),
-            new MenuEntry(0, "", "Layout and animation...", targetPage: "StyleLayout"),
-            new MenuEntry(0, "", "Text and font...", targetPage: "StyleText"),
-            new MenuEntry(0, "", "Background image...", targetPage: "StyleBackground"),
-            new MenuEntry(0, "", "Skin images and icons...", targetPage: "SkinAssets"),
+            new MenuEntry(0, "\uE790", "Colours...", targetPage: "StyleColours"),
+            new MenuEntry(0, "\uE8A9", "Layout and animation...", targetPage: "StyleLayout"),
+            new MenuEntry(0, "\uE8D2", "Text and font...", targetPage: "StyleText"),
+            new MenuEntry(0, "\uE8B9", "Background image...", targetPage: "StyleBackground"),
+            new MenuEntry(0, "\uE899", "Skin images and icons...", targetPage: "SkinAssets"),
             new MenuEntry(0, "", "Notifications...", targetPage: "Notifications"),
-            Act("", "Save this look to a file...", ExportStyle),
-            Act("", "Load a look from a file...", ImportStyle),
-            Act("", "Reset appearance", ResetAppearance),
+            Act("\uE74E", "Save this look to a file...", ExportStyle),
+            Act("\uE8E5", "Load a look from a file...", ImportStyle),
+            Act("\uE777", "Reset appearance", ResetAppearance),
             BackEntry()
         };
 
@@ -321,7 +376,7 @@ public sealed partial class MainForm
                 v => settings.ThemeBrightnessPercent = v, "%",
                 "Makes every colour of the theme lighter or darker."),
 
-            Act("", "Reset colours", () =>
+            Act("\uE777", "Reset colours", () =>
             {
                 settings.ThemeName = "Tokyo Night";
                 settings.CustomBackground = "";
@@ -382,10 +437,10 @@ public sealed partial class MainForm
             StyleNumber("Font size", FontScaleChoices, () => settings.MenuFontScalePercent,
                 v => settings.MenuFontScalePercent = v, "%", "The size of all text in the launcher."),
 
-            Act("", $"Font: {Theme.MenuFontFamily}", ChooseInstalledFont),
-            Act("", "Load a font file...", ChooseFontFile),
+            Act("\uE8D2", $"Font: {Theme.MenuFontFamily}", ChooseInstalledFont),
+            Act("\uE8E5", "Load a font file...", ChooseFontFile),
 
-            Act("", "Reset font", () =>
+            Act("\uE777", "Reset font", () =>
             {
                 settings.MenuFontScalePercent = 100;
                 settings.MenuFontFamily = "";
@@ -404,12 +459,12 @@ public sealed partial class MainForm
     {
         List<MenuEntry> list = new()
         {
-            Act("", "Choose an image, GIF or video...", ChooseBackground)
+            Act("\uE91B", "Choose an image, GIF or video...", ChooseBackground)
         };
 
         if (Theme.HasBackground)
         {
-            list.Add(Act("", "Remove the background", RemoveBackground));
+            list.Add(Act("\uE74D", "Remove the background", RemoveBackground));
 
             list.Add(StyleCycle("Fit", Enumerable.Range(0, FitNames.Length).ToArray(),
                 FitIndex, v => settings.BackgroundFit = v, v => FitNames[v],
@@ -466,7 +521,7 @@ public sealed partial class MainForm
             FileName = "my-look.umlook.json"
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         StyleFile file = new()
@@ -517,7 +572,7 @@ public sealed partial class MainForm
             Filter = "UtilMaster3000 look|*.umlook.json;*.json|All files|*.*"
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         try
@@ -615,44 +670,7 @@ public sealed partial class MainForm
             ? settings.LauncherOpacity
             : 100;
 
-    private void PickCustomizeColor(string which)
-    {
-        Color current = which switch
-        {
-            "searchbar" => Theme.SearchBar,
-            "row" => Theme.ActiveRow,
-            _ => Theme.BorderColor
-        };
-
-        using ColorDialog dialog = new()
-        {
-            Color = current,
-            FullOpen = true,
-            AnyColor = true
-        };
-
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
-
-        string color = Theme.ToHex(dialog.Color);
-
-        switch (which)
-        {
-            case "searchbar":
-                settings.CustomTopBar = color;
-                settings.TopBarBackgroundEnabled = true;
-                break;
-            case "row":
-                settings.CustomRowHighlight = color;
-                break;
-            default:
-                settings.CustomBorder = color;
-                break;
-        }
-
-        SaveSettings();
-        ApplyAppearance(reloadBackground: false);
-    }
+    private void PickCustomizeColor(string which) => PickColourLive(which);
 
     private void ChooseInstalledFont()
     {
@@ -664,7 +682,7 @@ public sealed partial class MainForm
             ShowEffects = false
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         settings.MenuFontFamily = dialog.Font.FontFamily.Name;
@@ -681,7 +699,7 @@ public sealed partial class MainForm
             Filter = "Font files|*.ttf;*.otf;*.ttc|All files|*.*"
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         try
@@ -741,7 +759,7 @@ public sealed partial class MainForm
             Filter = SkinImageFilter
         };
 
-        if (picker.ShowDialog(this) != DialogResult.OK)
+        if (picker.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         string? copiedPath = null;
@@ -758,7 +776,7 @@ public sealed partial class MainForm
                 SkinAssetPreviewSize(role),
                 initial);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
             {
                 File.Delete(copiedPath);
                 return;
@@ -795,7 +813,7 @@ public sealed partial class MainForm
                 SkinAssetPreviewSize(role),
                 asset);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
                 return;
 
             settings.ThemeImages[role] = crop.Result;
@@ -836,7 +854,7 @@ public sealed partial class MainForm
             Filter = SkinImageFilter
         };
 
-        if (picker.ShowDialog(this) != DialogResult.OK)
+        if (picker.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         string? copiedPath = null;
@@ -852,7 +870,7 @@ public sealed partial class MainForm
                 new Size(22, 22),
                 initial);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
             {
                 File.Delete(copiedPath);
                 return;
@@ -909,7 +927,7 @@ public sealed partial class MainForm
                 new Size(22, 22),
                 asset);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
                 return;
 
             settings.SharedButtonIcon = crop.Result;
@@ -1034,7 +1052,7 @@ public sealed partial class MainForm
         picker.Controls.Add(close);
         picker.CancelButton = close;
 
-        picker.ShowDialog(this);
+        picker.ShowDialog(DialogOwner);
     }
 
     private void AssignMenuIcon(MenuIconTarget target)
@@ -1045,7 +1063,7 @@ public sealed partial class MainForm
             Filter = SkinImageFilter
         };
 
-        if (picker.ShowDialog(this) != DialogResult.OK)
+        if (picker.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         string? copiedPath = null;
@@ -1073,7 +1091,7 @@ public sealed partial class MainForm
                 new Size(22, 22),
                 initial);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
             {
                 File.Delete(copiedPath);
                 return;
@@ -1103,7 +1121,7 @@ public sealed partial class MainForm
                 new Size(22, 22),
                 asset);
 
-            if (crop.ShowDialog(this) != DialogResult.OK)
+            if (crop.ShowDialog(DialogOwner) != DialogResult.OK)
                 return;
 
             settings.CustomButtonIcons[target.Key] = crop.Result;
@@ -1138,47 +1156,7 @@ public sealed partial class MainForm
     // COLOURS
     // --------------------------------------------------
 
-    private void PickThemeColor(string which)
-    {
-        // Start the custom theme from whatever is on screen now.
-        if (settings.ThemeName != Theme.CustomName)
-        {
-            settings.CustomBackground = Theme.ToHex(Theme.Background);
-            settings.CustomAccent = Theme.ToHex(Theme.Accent);
-            settings.CustomText = Theme.ToHex(Theme.Text);
-        }
-
-        Color current = which switch
-        {
-            "background" => Theme.Background,
-            "accent" => Theme.Accent,
-            _ => Theme.Text
-        };
-
-        using ColorDialog dialog = new()
-        {
-            Color = current,
-            FullOpen = true,
-            AnyColor = true
-        };
-
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
-
-        string hex = Theme.ToHex(dialog.Color);
-
-        switch (which)
-        {
-            case "background": settings.CustomBackground = hex; break;
-            case "accent": settings.CustomAccent = hex; break;
-            default: settings.CustomText = hex; break;
-        }
-
-        settings.ThemeName = Theme.CustomName;
-        SaveSettings();
-
-        ApplyAppearance(reloadBackground: false);
-    }
+    private void PickThemeColor(string which) => PickColourLive(which);
 
     // --------------------------------------------------
     // BACKGROUND MEDIA
@@ -1192,7 +1170,7 @@ public sealed partial class MainForm
             Filter = BackgroundMedia.FileFilter
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (dialog.ShowDialog(DialogOwner) != DialogResult.OK)
             return;
 
         string source = dialog.FileName;
@@ -1313,6 +1291,10 @@ public sealed partial class MainForm
         settings.BackgroundStrength = 40;
         settings.LauncherOpacity = 100;
         settings.AnimationSpeedPercent = 100;
+        settings.FlyoutDelayMs = 1000;
+        settings.UnfoldDelayMs = 1000;
+        settings.FlyoutSide = 0;
+        settings.FlyoutPlace = 0;
         SaveSettings();
 
         ApplyAppearance(reloadBackground: false);

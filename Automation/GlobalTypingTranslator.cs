@@ -36,14 +36,43 @@ public sealed class GlobalTypingTranslator : IDisposable
     private int renderedLength;
     private string renderedText = string.Empty;
 
+    private int wordSeed;
+
     public bool Enabled { get; private set; }
     public bool HookInstalled => hookHandle != IntPtr.Zero;
 
-    public event Action<bool>? EnabledChanged;
+    /// <summary>What typed letters turn into (Off = no keyboard hook at all).</summary>
+    public TypingMode Mode { get; private set; }
 
-    public GlobalTypingTranslator()
+    /// <summary>Which look "Weird" mode uses (index into <see cref="TextStyler.StyleNames"/>).</summary>
+    public int WeirdStyle { get; set; }
+
+    /// <summary>Short name for pop-ups and the status line.</summary>
+    public string ModeLabel => Mode switch
+    {
+        TypingMode.Weird => "WEIRD TEXT",
+        TypingMode.Off => "TYPING OFF",
+        _ => "TRANSLATOR"
+    };
+
+    public event Action<bool>? EnabledChanged;
+    public event Action<TypingMode>? ModeChanged;
+
+    public GlobalTypingTranslator(TypingMode mode = TypingMode.Russian, int weirdStyle = 0)
     {
         hookCallback = KeyboardCallback;
+        Mode = mode;
+        WeirdStyle = weirdStyle;
+
+        // "Off" means off: the keyboard hook is not even installed.
+        if (mode != TypingMode.Off)
+            InstallHook();
+    }
+
+    private void InstallHook()
+    {
+        if (hookHandle != IntPtr.Zero)
+            return;
 
         hookHandle = SetWindowsHookEx(
             WH_KEYBOARD_LL,
@@ -53,6 +82,36 @@ public sealed class GlobalTypingTranslator : IDisposable
         );
     }
 
+    private void RemoveHook()
+    {
+        if (hookHandle == IntPtr.Zero)
+            return;
+
+        UnhookWindowsHookEx(hookHandle);
+        hookHandle = IntPtr.Zero;
+    }
+
+    public void SetMode(TypingMode mode)
+    {
+        if (Mode == mode)
+            return;
+
+        ClearWord();
+        Mode = mode;
+
+        if (mode == TypingMode.Off)
+        {
+            SetEnabled(false);
+            RemoveHook();
+        }
+        else
+        {
+            InstallHook();
+        }
+
+        ModeChanged?.Invoke(mode);
+    }
+
     public void Toggle()
     {
         SetEnabled(!Enabled);
@@ -60,6 +119,10 @@ public sealed class GlobalTypingTranslator : IDisposable
 
     public void SetEnabled(bool enabled)
     {
+        // Switched off for good: it cannot be turned on until the mode changes.
+        if (enabled && Mode == TypingMode.Off)
+            return;
+
         if (Enabled == enabled)
             return;
 
@@ -158,6 +221,10 @@ public sealed class GlobalTypingTranslator : IDisposable
                 if (!uppercase)
                     letter = char.ToLowerInvariant(letter);
 
+                // A new word gets its own random pattern (stays the same while you type it).
+                if (buffer.Length == 0)
+                    wordSeed = Random.Shared.Next();
+
                 buffer.Append(letter);
 
                 if (!TryRenderWord())
@@ -193,24 +260,18 @@ public sealed class GlobalTypingTranslator : IDisposable
         string previousText = renderedText;
 
         // The previous text is what is currently visible.
-        // We replace it with the new transliteration.
-        string converted = Transliterator.Convert(buffer.ToString());
+        // We replace it with the new text.
+        string converted = Mode == TypingMode.Weird
+            ? TextStyler.Apply(buffer.ToString(), WeirdStyle, wordSeed)
+            : Transliterator.Convert(buffer.ToString());
 
         // Only touch the part of the word that actually changed.
         // Typing "k" after "pri" just appends one character;
         // typing "h" after "s" replaces one. Cost no longer grows
         // with word length, and undo history stays small.
-        int common = 0;
-        int maxCommon = Math.Min(previousText.Length, converted.Length);
-
-        while (common < maxCommon &&
-               previousText[common] == converted[common])
-        {
-            common++;
-        }
-
-        int backspaces = previousText.Length - common;
-        string toType = converted.Substring(common);
+        // Compared by whole characters: styled letters are two UTF-16 units
+        // but one backspace removes one of them.
+        (int backspaces, string toType) = Diff(previousText, converted);
 
         if (backspaces == 0 && toType.Length == 0)
             return true;
@@ -251,6 +312,40 @@ public sealed class GlobalTypingTranslator : IDisposable
         RepairPartialRender(sent, previousText, backspaces, toType);
 
         return false;
+    }
+
+    /// <summary>
+    /// What to do to turn the visible text into the new one: how many backspaces,
+    /// then what to type. Compared by whole characters (a styled letter is two
+    /// UTF-16 units but one backspace removes it).
+    /// </summary>
+    public static (int Backspaces, string ToType) Diff(string previous, string converted)
+    {
+        int[] before = CodePoints(previous);
+        int[] after = CodePoints(converted);
+
+        int common = 0;
+        int maxCommon = Math.Min(before.Length, after.Length);
+
+        while (common < maxCommon && before[common] == after[common])
+            common++;
+
+        System.Text.StringBuilder typed = new();
+
+        for (int i = common; i < after.Length; i++)
+            typed.Append(char.ConvertFromUtf32(after[i]));
+
+        return (before.Length - common, typed.ToString());
+    }
+
+    private static int[] CodePoints(string text)
+    {
+        List<int> points = new(text.Length);
+
+        foreach (System.Text.Rune rune in text.EnumerateRunes())
+            points.Add(rune.Value);
+
+        return points.ToArray();
     }
 
     private void RepairPartialRender(
@@ -398,11 +493,7 @@ public sealed class GlobalTypingTranslator : IDisposable
 
         Enabled = false;
 
-        if (hookHandle != IntPtr.Zero)
-        {
-            UnhookWindowsHookEx(hookHandle);
-            hookHandle = IntPtr.Zero;
-        }
+        RemoveHook();
 
         GC.KeepAlive(hookCallback);
         GC.SuppressFinalize(this);

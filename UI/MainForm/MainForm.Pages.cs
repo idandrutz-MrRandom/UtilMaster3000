@@ -217,6 +217,9 @@ public sealed partial class MainForm
             }),
 
             ["Style"] = BuildStylePage(),
+            ["Typing"] = BuildTypingPage(),
+            ["TypingStyles"] = BuildTypingStylesPage(),
+
             ["StyleColours"] = BuildColoursPage(),
             ["StyleLayout"] = BuildLayoutPage(),
             ["StyleText"] = BuildFontPage(),
@@ -227,6 +230,7 @@ public sealed partial class MainForm
             {
                 new MenuEntry(0, "", "Shortcuts...", targetPage: "Shortcuts"),
                 new MenuEntry(0, "", $"Hold to open menu: {HoldLabel()}", command: "hold"),
+                new MenuEntry(0, "\uE765", $"Typing mode: {ModeNames[(int)translator.Mode]}...", targetPage: "Typing"),
                 new MenuEntry(0, "", $"Live conversion: {OnOff(translator.Enabled)}", command: "toggle"),
                 new MenuEntry(0, "", $"Hide on focus loss: {OnOff(settings.HideOnFocusLoss)}", command: "focus-hide"),
                 new MenuEntry(0, "\uE700", $"Slide-out menus on hover: {OnOff(settings.HoverSubmenus)}",
@@ -240,6 +244,18 @@ public sealed partial class MainForm
                     expandText: $"Slide-out menus on hover: {OnOff(settings.HoverSubmenus)}" + NL +
                                 "Rest the mouse on a row that opens a menu and that menu slides out beside the launcher." + NL +
                                 "Click what you want straight away. Turn this off to open menus by clicking only."),
+                MotionDelayRow("Slide-out menu delay", FlyoutDelayChoices, settings.FlyoutDelayMs, v => settings.FlyoutDelayMs = v,
+                    "How long you rest on a row that opens a menu before it slides out. Longer = fewer accidental slide-outs."),
+                NotifyCycle("\uE8AB", "Slide-out side", new[] { 0, 1, 2 },
+                    () => Math.Clamp(settings.FlyoutSide, 0, 2), v => settings.FlyoutSide = v,
+                    v => FlyoutSideNames[v],
+                    "Which edge of the launcher the menu slides out of. Automatic uses the right and switches to the left when the screen has no room."),
+                NotifyCycle("\uE7C9", "Slide-out position", new[] { 0, 1 },
+                    () => Math.Clamp(settings.FlyoutPlace, 0, 1), v => settings.FlyoutPlace = v,
+                    v => FlyoutPlaceNames[v],
+                    "Level with the row you point at, or always from the top of the launcher."),
+                MotionDelayRow("Unfold long text after", UnfoldDelayChoices, settings.UnfoldDelayMs, v => settings.UnfoldDelayMs = v,
+                    "How long you rest on a row with long text before it unfolds and pushes the rows below down. \"never\" keeps rows still."),
                 new MenuEntry(0, "", $"Start with Windows: {OnOff(StartupManager.IsEnabled())}", command: "startup"),
                 new MenuEntry(0, "", $"Web search: {SearchEngines[EngineIndex()].Name}", command: "engine"),
                 new MenuEntry(0, "", "Reset settings", command: "reset"),
@@ -547,7 +563,9 @@ public sealed partial class MainForm
             new MenuEntry(0, "\uE962", "Autoclicker", targetPage: "Auto"),
             new MenuEntry(0, "", "Macros", targetPage: "Macros"),
 
-            Act("", "Pin last window on top", PinLastWindow),
+            Act("", PinRowLabel(), PinLastWindow),
+
+            PinnedSummaryRow(),
 
             Act("", $"Keep PC awake: {OnOff(keepAwake)}", () =>
             {
@@ -711,6 +729,8 @@ public sealed partial class MainForm
             (pinned.Value ? "Pinned: " : "Unpinned: ") + title,
             pinned.Value ? OnColor : OffColor
         );
+
+        RefreshPage();
     }
 
     private void OpenQuickNote()
@@ -1265,6 +1285,8 @@ public sealed partial class MainForm
             "Grab" => GrabPage(query),
             "Macros" => MacrosPage(query),
             "Notifications" => NotificationsPage(query),
+            "Tools" => FilterEntries(BuildToolsPage(), query),
+            "Pinned" => PinnedPage(query),
             "MacroEntry" => MacroEntryPage(query),
             "MacroStep" => MacroStepPage(query),
             "Vault" => VaultPage(query),
@@ -1601,7 +1623,7 @@ public sealed partial class MainForm
                 break;
 
             case "toggle":
-                translator.Toggle();
+                ToggleTyping();
                 RefreshPage();
                 break;
 

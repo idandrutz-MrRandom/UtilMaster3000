@@ -25,6 +25,11 @@ public sealed partial class MainForm : Form
     private int RowHeight => Theme.RowHeight;
     private const int MaxRows = 13;
 
+    // The search bar is as tall as its text needs (28 px was right for one font
+    // size only); everything below it moves by the difference.
+    private int searchExtra;
+    private int Chrome => 100 + searchExtra;
+
     // Pixels of this colour are see-through (TransparencyKey).
     private static readonly Color KeyColor = Color.FromArgb(1, 1, 1);
 
@@ -190,11 +195,14 @@ public sealed partial class MainForm : Form
             settings.Save();
         }
 
-        translator = new GlobalTypingTranslator();
-        notification = new ModeNotification();
+        translator = new GlobalTypingTranslator(
+            (TypingMode)Math.Clamp(settings.TypingMode, 0, 2),
+            Math.Clamp(settings.WeirdStyle, 0, TextStyler.StyleCount - 1));
+        notification = new ModeNotification { Label = translator.ModeLabel };
         ApplyNotificationSettings();
 
         translator.EnabledChanged += OnTranslatorChanged;
+        translator.ModeChanged += OnTypingModeChanged;
 
         AppIndex.BuildAsync();
         FileIndex.BuildAsync();
@@ -211,7 +219,7 @@ public sealed partial class MainForm : Form
         ShowPage("home");
         UpdateStatus(translator.Enabled);
 
-        if (!translator.HookInstalled)
+        if (!translator.HookInstalled && translator.Mode != TypingMode.Off)
         {
             MessageBox.Show(
                 "The global keyboard hook could not be installed.",
@@ -235,9 +243,9 @@ public sealed partial class MainForm : Form
         );
 
         trayMenu.Items.Add(
-            "Toggle translator",
+            "Toggle typing converter",
             null,
-            (_, _) => translator.Toggle()
+            (_, _) => ToggleTyping()
         );
 
         trayMenu.Items.Add(
@@ -467,6 +475,9 @@ public sealed partial class MainForm : Form
         currentPage == "TextTool" ? "Text" :
         currentPage == "Grab" ? "Tools" :
         currentPage == "Notifications" ? "Style" :
+        currentPage == "Typing" ? "Setup" :
+        currentPage == "Pinned" ? "Tools" :
+        currentPage == "TypingStyles" ? "Typing" :
         currentPage.StartsWith("Style", StringComparison.Ordinal) && currentPage != "Style" ? "Style" :
         currentPage == "SkinAssets" ? "Style" :
         currentPage == "MacroEntry" ? "Macros" :
@@ -517,32 +528,48 @@ public sealed partial class MainForm : Form
             Theme.PaintBackground(
                 e.Graphics,
                 menuBox.ClientRectangle,
-                new Size(menuBox.ClientSize.Width, 100 + MaxRows * RowHeight));
+                new Size(menuBox.ClientSize.Width, Chrome + MaxRows * RowHeight));
             Theme.DrawAsset(e.Graphics, "frame", menuBox.ClientRectangle);
 
-            using Pen border = new(Theme.BorderColor, Theme.BorderThickness);
+            // The window's rounded edge is a hard-edged clip, the border a smooth
+            // line. Drawn exactly on the edge, a few pixels of the picture show
+            // past the line at the corners. So the line is drawn a little wider
+            // and further out: the part beyond the edge is clipped away, and
+            // what is left covers the edge completely.
+            const float overlap = 0.75f;
 
-            if (Theme.CornerRadius > 0)
+            float thickness = Theme.BorderThickness;
+            float centre = thickness / 2f - overlap;
+            int width = menuBox.ClientSize.Width;
+            int height = menuBox.ClientSize.Height;
+
+            using Pen border = new(Theme.BorderColor, thickness + overlap * 2f)
             {
-                using System.Drawing.Drawing2D.GraphicsPath path =
-                    DoublePanel.RoundedPath(
-                        new Rectangle(1, 1, menuBox.ClientSize.Width - 3, menuBox.ClientSize.Height - 3),
-                        Theme.CornerRadius);
+                LineJoin = System.Drawing.Drawing2D.LineJoin.Round
+            };
 
-                e.Graphics.DrawPath(border, path);
+            using System.Drawing.Drawing2D.GraphicsPath path = new();
+
+            RectangleF frame = new(centre, centre, width - 2 * centre, height - 2 * centre);
+            float radius = Math.Max(0f, Theme.CornerRadius - centre);
+
+            if (radius >= 1f)
+            {
+                float d = Math.Min(radius * 2f, Math.Min(frame.Width, frame.Height));
+
+                path.AddArc(frame.Left, frame.Top, d, d, 180, 90);
+                path.AddArc(frame.Right - d, frame.Top, d, d, 270, 90);
+                path.AddArc(frame.Right - d, frame.Bottom - d, d, d, 0, 90);
+                path.AddArc(frame.Left, frame.Bottom - d, d, d, 90, 90);
+                path.CloseFigure();
             }
             else
             {
-                int left = 1;
-                int top = 1;
-                int right = menuBox.ClientSize.Width - 2;
-                int bottom = menuBox.ClientSize.Height - 2;
-
-                e.Graphics.DrawLine(border, left, top, right, top);
-                e.Graphics.DrawLine(border, left, top, left, bottom);
-                e.Graphics.DrawLine(border, right, top, right, bottom);
-                e.Graphics.DrawLine(border, left, bottom, right, bottom);
+                path.AddRectangle(frame);
             }
+
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.DrawPath(border, path);
         };
 
         Controls.Add(menuBox);
@@ -775,7 +802,7 @@ public sealed partial class MainForm : Form
         }
 
         // Window height follows the number of visible rows.
-        int menuHeight = 100 + visible * RowHeight;
+        int menuHeight = Chrome + visible * RowHeight;
 
         menuHeightTarget = menuHeight;
         rowsPanel.Height = visible * RowHeight;
@@ -937,7 +964,7 @@ public sealed partial class MainForm : Form
 
         if (unfolded || rowsWereUnfolded)
         {
-            menuHeightTarget = 100 + y;
+            menuHeightTarget = Chrome + y;
         }
 
         rowsWereUnfolded = unfolded;
@@ -1039,7 +1066,8 @@ public sealed partial class MainForm : Form
     {
         long now = uiClock.ElapsedMilliseconds;
         // The animation speed setting: 0 jumps every change to its end.
-        double dt = Math.Max(1, now - lastUiTick) / 1000.0 * Theme.AnimationScale;
+        double realDt = Math.Max(1, now - lastUiTick) / 1000.0;
+        double dt = realDt * Theme.AnimationScale;
         lastUiTick = now;
 
         bool busy = false;
@@ -1064,7 +1092,7 @@ public sealed partial class MainForm : Form
         // Row highlight + slide-in.
         foreach (LauncherRow row in visibleRows)
         {
-            if (row.Step(dt))
+            if (row.Step(dt, realDt))
                 busy = true;
         }
 
@@ -1181,7 +1209,7 @@ public sealed partial class MainForm : Form
     {
         if (settings.HoldToOpenMs <= 0)
         {
-            translator.Toggle();
+            ToggleTyping();
             return;
         }
 
@@ -1206,7 +1234,7 @@ public sealed partial class MainForm : Form
             pressActive = false;
 
             if (!holdFired)
-                translator.Toggle();
+                ToggleTyping();
 
             return;
         }
@@ -1263,13 +1291,18 @@ public sealed partial class MainForm : Form
         if (waitingForHotkey)
             return;
 
-        statusLabel.Text = enabled
-            ? "● MODE: ON"
-            : "○ MODE: OFF";
+        statusLabel.Text = translator.Mode switch
+        {
+            TypingMode.Off => "typing converter: disabled",
+            TypingMode.Weird => enabled ? "● WEIRD TEXT: ON" : "○ WEIRD TEXT: OFF",
+            _ => enabled ? "● MODE: ON" : "○ MODE: OFF"
+        };
 
-        statusLabel.ForeColor = enabled
-            ? OnColor
-            : OffColor;
+        statusLabel.ForeColor = translator.Mode == TypingMode.Off
+            ? Theme.Mix(Theme.Text, Theme.Background, 0.4f)
+            : enabled
+                ? OnColor
+                : OffColor;
 
         statusLabel.Invalidate();
     }
@@ -1490,6 +1523,7 @@ public sealed partial class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         translator.EnabledChanged -= OnTranslatorChanged;
+        translator.ModeChanged -= OnTypingModeChanged;
 
         uiTimer.Stop();
         uiTimer.Dispose();

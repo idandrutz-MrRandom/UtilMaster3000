@@ -52,6 +52,18 @@ internal static class Theme
 
     public const string CustomName = "Custom";
 
+    /// <summary>The three colours that identify a preset (for theme tiles).</summary>
+    public static (Color Background, Color Accent, Color Text) Preview(string name)
+    {
+        if (!Presets.TryGetValue(name, out Preset? p))
+            return (Color.FromArgb(40, 40, 48), Color.Gray, Color.Silver);
+
+        return (
+            ColorTranslator.FromHtml(p.Background),
+            ColorTranslator.FromHtml(p.Accent),
+            ColorTranslator.FromHtml(p.Text));
+    }
+
     public static string[] PresetNames { get; } =
         Presets.Keys.Append(CustomName).ToArray();
 
@@ -78,6 +90,9 @@ internal static class Theme
 
     /// <summary>Multiplier on animation time: 1 = normal, large = instant.</summary>
     public static double AnimationScale { get; private set; } = 1.0;
+
+    /// <summary>Seconds a row must stay highlighted before long text unfolds (negative = never).</summary>
+    public static float UnfoldDelaySeconds { get; private set; } = 1f;
     public static string MenuFontFamily { get; private set; } = "Consolas";
     public static string AssetFolder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -185,6 +200,9 @@ internal static class Theme
         CornerRadius = Math.Clamp(s.CornerRadius, 0, 24);
         SearchBarOpacityPercent = Math.Clamp(s.TopBarOpacityPercent, 0, 100);
         MenuFontScale = Math.Clamp(s.MenuFontScalePercent, 80, 140) / 100f;
+        UnfoldDelaySeconds = s.UnfoldDelayMs < 0
+            ? -1f
+            : Math.Clamp(s.UnfoldDelayMs, 0, 10000) / 1000f;
         AnimationScale = s.AnimationSpeedPercent <= 0
             ? 60.0
             : Math.Clamp(s.AnimationSpeedPercent, 20, 400) / 100.0;
@@ -921,6 +939,46 @@ internal static class Theme
         catch
         {
             // A broken frame must never break painting.
+        }
+    }
+
+    /// <summary>
+    /// The average colour behind <paramref name="area"/> (menu colour plus the
+    /// picture). A text box cannot be see-through, so the search bar is one flat
+    /// colour: its own colour blended with this. An animated background would
+    /// make that flicker, so it counts as plain menu colour.
+    /// </summary>
+    public static Color AverageBehind(Rectangle area, Size layout)
+    {
+        if (BackgroundImage == null || animated || area.Width <= 0 || area.Height <= 0)
+            return Background;
+
+        try
+        {
+            using Bitmap probe = new(area.Width, area.Height, PixelFormat.Format32bppPArgb);
+
+            using (Graphics g = Graphics.FromImage(probe))
+            {
+                g.Clear(Background);
+                g.TranslateTransform(-area.X, -area.Y);
+                PaintBackground(g, new Rectangle(Point.Empty, layout), layout);
+            }
+
+            using Bitmap one = new(1, 1, PixelFormat.Format32bppPArgb);
+
+            using (Graphics g = Graphics.FromImage(one))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(probe, new Rectangle(0, 0, 1, 1));
+            }
+
+            Color average = one.GetPixel(0, 0);
+            return Color.FromArgb(average.R, average.G, average.B);
+        }
+        catch
+        {
+            return Background;
         }
     }
 

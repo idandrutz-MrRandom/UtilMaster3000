@@ -188,7 +188,7 @@ internal sealed class LauncherRow : Control
 
     // ---- hover reveal: long text / a picture unfolds under the row ----
     public static int BaseHeight => Theme.RowHeight;
-    private const float RevealDelay = 0.12f;
+    private static float RevealDelay => Theme.UnfoldDelaySeconds;
 
     private string? revealText;
     private Image? revealImage;
@@ -322,7 +322,9 @@ internal sealed class LauncherRow : Control
     }
 
     /// <summary>Advances animations; returns true while still moving.</summary>
-    public bool Step(double dt)
+    public bool Step(double dt) => Step(dt, dt);
+
+    public bool Step(double dt, double realDt)
     {
         bool busy = false;
 
@@ -354,9 +356,13 @@ internal sealed class LauncherRow : Control
 
         if (active)
         {
-            activeFor += (float)dt;
+            // The wait before unfolding is real time: the animation speed setting
+            // changes how fast things move, not how long you have to rest on a row.
+            activeFor += (float)realDt;
 
-            if (extraHeight > 0)
+            // A negative delay means: never unfold (the text still shows in full
+            // in the status line / on click as before).
+            if (extraHeight > 0 && RevealDelay >= 0f)
             {
                 if (activeFor >= RevealDelay)
                     revealTarget = 1f;
@@ -698,6 +704,9 @@ internal sealed class ModeNotification : Form
 
     public bool Muted { get; set; }
 
+    /// <summary>What the pop-up calls the converter (TRANSLATOR, WEIRD TEXT).</summary>
+    public string Label { get; set; } = "TRANSLATOR";
+
     /// <summary>The small utility toasts ("Copied...") can be switched off on their own.</summary>
     public bool MessagesEnabled { get; set; } = true;
 
@@ -787,7 +796,7 @@ internal sealed class ModeNotification : Form
     private void Display(bool enabled)
     {
         DisplayCore(
-            enabled ? "TRANSLATOR: ON" : "TRANSLATOR: OFF",
+            enabled ? $"{Label}: ON" : $"{Label}: OFF",
             enabled ? OnColor : OffColor
         );
     }

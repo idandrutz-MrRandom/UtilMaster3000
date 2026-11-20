@@ -64,6 +64,19 @@ internal sealed class AppSettings
     public bool HideOnFocusLoss { get; set; }
 
     /// <summary>Menus slide out beside the launcher when you rest the mouse on them.</summary>
+    // How long the pointer must rest on a row before a slide-out menu opens (ms).
+    public int FlyoutDelayMs { get; set; } = 1000;
+
+    // Which side the slide-out menu comes out on: 0 = automatic (right, or left when
+    // there is no room), 1 = right, 2 = left.
+    public int FlyoutSide { get; set; }
+
+    // Where it sits up and down: 0 = level with the row you point at, 1 = top of the launcher.
+    public int FlyoutPlace { get; set; }
+
+    // How long it must rest on a row with long text before the row unfolds (ms; -1 = never).
+    public int UnfoldDelayMs { get; set; } = 1000;
+
     public bool HoverSubmenus { get; set; } = true;
 
     // Download by link
@@ -102,6 +115,12 @@ internal sealed class AppSettings
 
     // Screen recordings (MP4) also capture the sound the PC is playing.
     public bool RecordSound { get; set; } = true;
+    // What the typing converter does: 0 = Russian, 1 = Weird text, 2 = Off.
+    public int TypingMode { get; set; }
+
+    // Which look Weird text uses (index into TextStyler.StyleNames).
+    public int WeirdStyle { get; set; }
+
     public bool CalcDegrees { get; set; }
 
     // Autoclicker

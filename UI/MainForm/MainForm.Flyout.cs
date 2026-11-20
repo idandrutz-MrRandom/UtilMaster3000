@@ -18,9 +18,12 @@ namespace UtilMaster3000;
 public sealed partial class MainForm
 {
     private const int FlyoutWidth = 320;
+    private const int FlyoutScreenMargin = 8;    // kept free below the drawer
+    private const int FlyoutRowInset = 12;      // the drawer's padding above its first row
     private const int FlyoutMaxRows = 40;       // entries read from a menu
     private const int FlyoutVisibleRows = 9;    // taller than this: it scrolls
-    private const int FlyoutDwellMs = 220;
+    // How long the pointer must rest on a row before its menu slides out (a setting).
+    private int FlyoutDwellMs => Math.Clamp(settings.FlyoutDelayMs, 0, 10000);
     private const int FlyoutLeaveMs = 420;
 
     private readonly System.Windows.Forms.Timer flyoutTimer = new() { Interval = 100 };
@@ -62,7 +65,7 @@ public sealed partial class MainForm
         /// <summary>True while it is sliding back in.</summary>
         public bool Closing => direction < 0;
 
-        public FlyoutForm(bool onRight, int edge, int top, int height, int gripTop, int gripHeight)
+        public FlyoutForm(bool onRight, int edge, int top, int height, int gripTop, int gripHeight, int viewHeight)
         {
             this.onRight = onRight;
             this.edge = edge;
@@ -83,9 +86,26 @@ public sealed partial class MainForm
             content.BackColor = Theme.Background;
             content.Paint += (_, e) =>
             {
-                // Same frame as the launcher: a 2 px accent border.
-                using Pen border = new(Theme.Accent, 2f);
-                e.Graphics.DrawRectangle(border, 1, 1, content.Width - 3, content.Height - 3);
+                // Same frame as the launcher: its border colour and thickness and its
+                // corner rounding.
+                // Drawn a little wider and further out, like the launcher's, so the part
+                // beyond the window's edge is clipped away and the edge is fully covered.
+                const float overlap = 0.75f;
+
+                float thickness = Theme.BorderThickness;
+                float centre = thickness / 2f - overlap;
+
+                using Pen border = new(Theme.BorderColor, thickness + overlap * 2f)
+                {
+                    LineJoin = System.Drawing.Drawing2D.LineJoin.Round
+                };
+
+                using System.Drawing.Drawing2D.GraphicsPath frame = FramePath(
+                    new RectangleF(centre, centre, content.Width - 2 * centre, content.Height - 2 * centre),
+                    Math.Max(0f, Theme.CornerRadius - centre));
+
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.DrawPath(border, frame);
 
                 // The launcher's scroll bar, now the curtain's edge: it slid
                 // out with the drawer (nobody scrolls the launcher meanwhile).
@@ -95,7 +115,7 @@ public sealed partial class MainForm
             };
 
             viewport.Location = new Point(Pad, Pad);
-            viewport.Size = new Size(fullWidth - Pad * 2 - Bar - 2, height - Pad * 2);
+            viewport.Size = new Size(fullWidth - Pad * 2 - Bar - 2, viewHeight);
             viewport.BackColor = Theme.Background;
 
             list.Location = new Point(0, 0);
@@ -189,10 +209,49 @@ public sealed partial class MainForm
             }
         }
 
+        // A rectangle with the launcher's corner rounding on all four corners, so beside
+        // a rounded launcher the drawer is a matching panel (a flat side would leave a
+        // notch against the launcher's rounded corners).
+        private static System.Drawing.Drawing2D.GraphicsPath FramePath(RectangleF r, float radius)
+        {
+            System.Drawing.Drawing2D.GraphicsPath path = new();
+
+            if (radius < 1f)
+            {
+                path.AddRectangle(r);
+                return path;
+            }
+
+            float d = Math.Min(radius * 2f, Math.Min(r.Width, r.Height));
+
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        // The window itself has the same rounded corners.
+        private void UpdateShape()
+        {
+            if (Width < 2 || Height < 2)
+                return;
+
+            using System.Drawing.Drawing2D.GraphicsPath path = FramePath(
+                new RectangleF(0, 0, Width, Height),
+                Math.Min(Theme.CornerRadius, Math.Min(Width, Height) / 2f));
+
+            Region? old = Region;
+            Region = new Region(path);
+            old?.Dispose();
+        }
+
         // Where the drawer's contents sit while the window is `width` wide.
         private void PlaceContent(int width)
         {
             Width = Math.Max(1, width);
+            UpdateShape();
 
             if (onRight)
             {
@@ -262,6 +321,48 @@ public sealed partial class MainForm
         }
     }
 
+    private static readonly string[] FlyoutSideNames = { "automatic", "right", "left" };
+    private static readonly string[] FlyoutPlaceNames = { "beside the row", "top of the launcher" };
+
+    // (Turning slide-out menus off altogether is the on / off switch above them.)
+    private static readonly int[] FlyoutDelayChoices = { 0, 300, 600, 1000, 1500, 2000, 3000 };
+    private static readonly int[] UnfoldDelayChoices = { 0, 300, 600, 1000, 1500, 2000, 3000, -1 };
+
+    private static string DelayText(int ms) =>
+        ms < 0 ? "never" : ms == 0 ? "instant" : ms % 1000 == 0 ? ms / 1000 + " s" : (ms / 1000.0).ToString("0.0") + " s";
+
+    // A setting row: click for the next delay, right-click for the previous.
+    private MenuEntry MotionDelayRow(string label, int[] choices, int current, Action<int> set, string tip)
+    {
+        int index = Array.IndexOf(choices, current);
+
+        if (index < 0)
+        {
+            // A stored value that is not one of the choices counts as the nearest one.
+            index = 0;
+
+            for (int i = 1; i < choices.Length; i++)
+            {
+                if (choices[i] >= 0 && Math.Abs(choices[i] - current) < Math.Abs(choices[index] - current))
+                    index = i;
+            }
+        }
+
+        void Step(int direction)
+        {
+            set(choices[(index + direction + choices.Length) % choices.Length]);
+            Theme.Configure(settings);
+            SaveSettings();
+            RefreshPage();
+        }
+
+        string text = $"{label}: {DelayText(choices[index])}";
+
+        return new MenuEntry(0, "\uE916", text,
+            run: () => Step(1), runAlt: () => Step(-1),
+            expandText: text + NL + tip + NL + "Click = next value, right-click = previous.");
+    }
+
     private void SetupFlyouts()
     {
         flyoutTimer.Tick += (_, _) => FlyoutTick();
@@ -315,8 +416,41 @@ public sealed partial class MainForm
         }
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(Point point);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+    // Is it really the launcher (or its slid-out menu) that is on screen at this
+    // point? The rows only know where they would be: with an app covering the
+    // launcher, that place is the app's, and nothing may slide out over it.
+    private bool LauncherIsAt(Point screen)
+    {
+        IntPtr hit = WindowFromPoint(screen);
+
+        if (hit == IntPtr.Zero)
+            return false;
+
+        IntPtr root = GetAncestor(hit, 2 /* GA_ROOT */);
+
+        if (root == IntPtr.Zero)
+            root = hit;
+
+        if (root == Handle)
+            return true;
+
+        FlyoutForm? open = flyout;
+
+        return open != null && !open.IsDisposed && open.IsHandleCreated && root == open.Handle;
+    }
+
     private LauncherRow? RowUnder(Point screen)
     {
+        // Behind another window: no row is under the pointer.
+        if (!LauncherIsAt(screen))
+            return null;
+
         foreach (LauncherRow row in visibleRows)
         {
             if (row.IsHandleCreated && row.RectangleToScreen(row.ClientRectangle).Contains(screen))
@@ -431,13 +565,41 @@ public sealed partial class MainForm
 
         // Right against the launcher's edge: touching, never overlapping.
         // (The launcher's scroll bar moves onto the drawer's leading edge.)
-        bool onRight = menu.Right + FlyoutWidth <= area.Right;
+        // Which edge is the setting; with no room on that side it uses the other.
+        bool roomRight = menu.Right + FlyoutWidth <= area.Right;
+        bool roomLeft = menu.Left - FlyoutWidth >= area.Left;
+
+        bool onRight = settings.FlyoutSide switch
+        {
+            1 => roomRight || !roomLeft,
+            2 => !(roomLeft || !roomRight),
+            _ => roomRight
+        };
+
         int edge = onRight ? menu.Right : menu.Left;
-        int top = Math.Clamp(menu.Top, area.Top, Math.Max(area.Top, area.Bottom - height));
+
+        // Up and down: level with the row that was pointed at (the drawer's first row
+        // sits beside it), or at the launcher's top.
+        Rectangle anchorRect = anchor.RectangleToScreen(anchor.ClientRectangle);
+        int wantedTop = settings.FlyoutPlace == 1 ? menu.Top : anchorRect.Top - FlyoutRowInset;
+
+        // The drawer stays inside the launcher's own height (and the screen): a list
+        // that would hang out below it gets shorter and scrolls instead, so the two
+        // line up. Only with room for fewer than three rows does it move up.
+        int lowest = Math.Min(menu.Bottom, area.Bottom - FlyoutScreenMargin);
+        int highest = Math.Max(menu.Top, area.Top);
+
+        wantedTop = Math.Max(wantedTop, highest);
+
+        int room = lowest - wantedTop;
+        int smallest = Math.Min(height, LauncherRow.BaseHeight * 3 + 24);
+        height = Math.Max(smallest, Math.Min(height, room));
+
+        int top = Math.Clamp(wantedTop, highest, Math.Max(highest, lowest - height));
 
         // Where the bar sits (its own size if the list scrolls, else beside the row).
         int gripHeight = 40;
-        int gripTop = Math.Clamp(anchor.RectangleToScreen(anchor.ClientRectangle).Top - top, 14, height - 14 - gripHeight);
+        int gripTop = Math.Clamp(anchorRect.Top - top, 14, Math.Max(14, height - 14 - gripHeight));
 
         if (LauncherThumb(out int thumbTop, out int thumbHeight))
         {
@@ -445,7 +607,15 @@ public sealed partial class MainForm
             gripTop = Math.Clamp(rowsPanel.RectangleToScreen(new Rectangle(0, thumbTop, 1, 1)).Top - top, 6, Math.Max(6, height - 6 - thumbHeight));
         }
 
-        FlyoutForm f = new(onRight, edge, top, height, gripTop, gripHeight);
+        // Only whole rows show: a row cut in half looks broken, and whole rows keep the
+        // drawer's rows on the same grid as the launcher's. (What does not fit scrolls;
+        // the spare pixels go below the last row, so the bottom edge still lines up.)
+        int viewHeight = height - FlyoutRowInset * 2;
+
+        if (entries.Count * LauncherRow.BaseHeight > viewHeight)
+            viewHeight = Math.Max(LauncherRow.BaseHeight, viewHeight / LauncherRow.BaseHeight * LauncherRow.BaseHeight);
+
+        FlyoutForm f = new(onRight, edge, top, height, gripTop, gripHeight, viewHeight);
         flyoutCurtain = onRight;
         rowsPanel.Invalidate();
 
