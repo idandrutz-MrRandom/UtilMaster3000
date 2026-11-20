@@ -19,10 +19,10 @@ public sealed partial class MainForm : Form
     private const int WM_NCLBUTTONDOWN = 0x00A1;
     private const int HTCAPTION = 2;
 
-    private const int MenuWidth = 380;
-    private const int WindowWidth = MenuWidth + 40;
-    private const int RowsWidth = MenuWidth - 28;
-    private const int RowHeight = 32;
+    private int MenuWidth => Theme.MenuWidth;
+    private int WindowWidth => MenuWidth + 40;
+    private int RowsWidth => MenuWidth - 28;
+    private int RowHeight => Theme.RowHeight;
     private const int MaxRows = 13;
 
     // Pixels of this colour are see-through (TransparencyKey).
@@ -39,11 +39,6 @@ public sealed partial class MainForm : Form
     private static Color OffColor => Theme.Off;
 
     private static Color AccentColor => Theme.Accent;
-
-    private static readonly string MonoFont = GetAvailableFont(
-        "JetBrains Mono",
-        "Consolas"
-    );
 
     private sealed class HotkeySlot
     {
@@ -176,6 +171,9 @@ public sealed partial class MainForm : Form
         settings = AppSettings.Load();
         Calc.Degrees = settings.CalcDegrees;
         Theme.Configure(settings);
+        Theme.ConfigureAssets(settings);
+        ClientSize = new Size(WindowWidth, ClientSize.Height);
+        ForeColor = TextColor;
 
         toggleKey.Mods = settings.HotkeyModifiers;
         toggleKey.Key = (Keys)settings.HotkeyKey;
@@ -449,6 +447,8 @@ public sealed partial class MainForm : Form
         currentPage == "TextTool" ? "Text" :
         currentPage == "Grab" ? "Tools" :
         currentPage == "Notifications" ? "Style" :
+        currentPage == "Customize" ? "Style" :
+        currentPage == "SkinAssets" ? "Customize" :
         currentPage == "MacroEntry" ? "Macros" :
         currentPage == "MacroStep" ? "MacroEntry" : "home";
 
@@ -456,28 +456,6 @@ public sealed partial class MainForm : Form
     {
         BuildPages();
         ShowPage(currentPage, keepSelection: true);
-    }
-
-    // --------------------------------------------------
-    // FONT
-    // --------------------------------------------------
-
-    private static string GetAvailableFont(params string[] fonts)
-    {
-        foreach (FontFamily family in FontFamily.Families)
-        {
-            foreach (string requested in fonts)
-            {
-                if (family.Name.Equals(
-                    requested,
-                    StringComparison.OrdinalIgnoreCase))
-                {
-                    return family.Name;
-                }
-            }
-        }
-
-        return "Consolas";
     }
 
     // --------------------------------------------------
@@ -490,7 +468,7 @@ public sealed partial class MainForm : Form
 
         breadcrumb.Location = new Point(20, 8);
         breadcrumb.Size = new Size(MenuWidth, 25);
-        breadcrumb.Font = new Font(MonoFont, 11f, FontStyle.Bold);
+        breadcrumb.Font = Theme.CreateMenuFont(11f * Theme.MenuFontScale, FontStyle.Bold);
         breadcrumb.FillColor = Theme.Strong;
         breadcrumb.OutlineColor = BackgroundColor;
         breadcrumb.KeyColor = KeyColor;
@@ -511,39 +489,70 @@ public sealed partial class MainForm : Form
         menuBox.Location = new Point(20, 40);
         menuBox.Size = new Size(MenuWidth, 388);
         menuBox.BackColor = BackgroundColor;
+        menuBox.CornerRadius = Theme.CornerRadius;
 
         menuBox.Paint += (_, e) =>
         {
             // Background image (if any) goes under the rows and border.
             Theme.PaintBackground(e.Graphics, menuBox.ClientRectangle);
+            Theme.DrawAsset(e.Graphics, "frame", menuBox.ClientRectangle);
 
-            using Pen border = new(AccentColor, 2f);
+            using Pen border = new(Theme.BorderColor, Theme.BorderThickness);
 
-            int left = 1;
-            int top = 1;
-            int right = menuBox.ClientSize.Width - 2;
-            int bottom = menuBox.ClientSize.Height - 2;
+            if (Theme.CornerRadius > 0)
+            {
+                using System.Drawing.Drawing2D.GraphicsPath path =
+                    DoublePanel.RoundedPath(
+                        new Rectangle(1, 1, menuBox.ClientSize.Width - 3, menuBox.ClientSize.Height - 3),
+                        Theme.CornerRadius);
 
-            e.Graphics.DrawLine(border, left, top, right, top);
-            e.Graphics.DrawLine(border, left, top, left, bottom);
-            e.Graphics.DrawLine(border, right, top, right, bottom);
-            e.Graphics.DrawLine(border, left, bottom, right, bottom);
+                e.Graphics.DrawPath(border, path);
+            }
+            else
+            {
+                int left = 1;
+                int top = 1;
+                int right = menuBox.ClientSize.Width - 2;
+                int bottom = menuBox.ClientSize.Height - 2;
+
+                e.Graphics.DrawLine(border, left, top, right, top);
+                e.Graphics.DrawLine(border, left, top, left, bottom);
+                e.Graphics.DrawLine(border, right, top, right, bottom);
+                e.Graphics.DrawLine(border, left, bottom, right, bottom);
+            }
         };
 
         Controls.Add(menuBox);
 
         searchBackground.Location = new Point(12, 12);
         searchBackground.Size = new Size(RowsWidth, 28);
-        searchBackground.BackColor = SearchColor;
+        Color searchBarColor = settings.TopBarBackgroundEnabled
+            ? Theme.SearchBar
+            : SearchColor;
+        int searchBarOpacity = settings.TopBarBackgroundEnabled
+            ? Theme.SearchBarOpacityPercent
+            : 100;
+        searchBackground.BackColor = Color.FromArgb(
+            searchBarOpacity * 255 / 100,
+            searchBarColor);
+        searchBackground.CornerRadius = Math.Min(Theme.CornerRadius, 14);
+        searchBackground.Paint += (_, e) =>
+            Theme.DrawAsset(
+                e.Graphics,
+                "search",
+                searchBackground.ClientRectangle,
+                settings.TopBarBackgroundEnabled
+                    ? Theme.SearchBarOpacityPercent / 100f
+                    : 1f);
 
         menuBox.Controls.Add(searchBackground);
 
         searchBox.Location = new Point(8, 3);
         searchBox.Size = new Size(RowsWidth - 16, 22);
         searchBox.BorderStyle = BorderStyle.None;
-        searchBox.BackColor = SearchColor;
+        searchBox.BackColor = searchBarColor;
         searchBox.ForeColor = Theme.Strong;
-        searchBox.Font = new Font(MonoFont, 9f);
+        searchBox.Font = Theme.CreateMenuFont(9f * Theme.MenuFontScale);
         searchBox.PlaceholderText = "Go...";
         searchBox.TextChanged += SearchBox_TextChanged;
 
@@ -590,7 +599,7 @@ public sealed partial class MainForm : Form
         statusLabel.BackColor = Color.Transparent;
         statusLabel.Location = new Point(12, 362);
         statusLabel.Size = new Size(RowsWidth, 18);
-        statusLabel.Font = new Font(MonoFont, 8f);
+        statusLabel.Font = Theme.CreateMenuFont(8f * Theme.MenuFontScale);
         statusLabel.TextAlign = ContentAlignment.MiddleCenter;
 
         menuBox.Controls.Add(statusLabel);
@@ -769,8 +778,7 @@ public sealed partial class MainForm : Form
                 row = new LauncherRow(
                     entry.Index,
                     entry.Icon,
-                    entry.Label,
-                    MonoFont
+                    entry.Label
                 );
 
                 row.Location = new Point(0, i * RowHeight);
@@ -836,6 +844,8 @@ public sealed partial class MainForm : Form
             else
                 AttachIcon(row, entry.iconPath);
 
+            row.CustomIconKey = MenuIconKey(currentPage, entry);
+
             // Anything too long for one line unfolds on hover so it can be read.
             row.SetReveal(
                 entry.expandText ?? (entry.expandImage == null ? entry.Label : null),
@@ -854,6 +864,14 @@ public sealed partial class MainForm : Form
 
         if (animateIn)
             StartUi();
+    }
+
+    private static string MenuIconKey(string page, MenuEntry entry)
+    {
+        string identity = entry.targetPage ?? entry.command ??
+            $"{entry.Icon}|{entry.Label}";
+
+        return page + "|" + identity;
     }
 
     private bool rowsWereUnfolded;
@@ -884,7 +902,6 @@ public sealed partial class MainForm : Form
         if (unfolded || rowsWereUnfolded)
         {
             menuHeightTarget = 100 + y;
-            SetMenuHeight(menuHeightTarget);
         }
 
         rowsWereUnfolded = unfolded;
@@ -953,10 +970,18 @@ public sealed partial class MainForm : Form
         menuHeightCurrent = height;
 
         int h = (int)Math.Round(height);
+        int clientHeight = 40 + h + 10;
+
+        if (menuBox.Height == h &&
+            ClientSize.Height == clientHeight &&
+            statusLabel.Top == h - 28)
+        {
+            return;
+        }
 
         menuBox.Height = h;
-        ClientSize = new Size(WindowWidth, 40 + h + 10);
-        statusLabel.Location = new Point(12, h - 28);
+        ClientSize = new Size(WindowWidth, clientHeight);
+        statusLabel.Top = h - 28;
 
         // Repaint the border so no old edges are left behind.
         menuBox.Invalidate();

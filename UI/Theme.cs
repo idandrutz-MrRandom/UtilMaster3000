@@ -4,9 +4,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace UtilMaster3000;
 
@@ -55,8 +57,41 @@ internal static class Theme
     public static Color On { get; private set; }
     public static Color Off { get; private set; }
 
-    public static Color ActiveRow => Mix(Background, Accent, 0.16f);
+    public static Color ActiveRow { get; private set; }
+    public static Color SearchBar { get; private set; }
+    public static Color BorderColor { get; private set; }
     public static Color Number => Mix(Text, Background, 0.45f);
+    public static int MenuWidth { get; private set; } = 380;
+    public static int RowHeight { get; private set; } = 32;
+    public static int BorderThickness { get; private set; } = 2;
+    public static int CornerRadius { get; private set; }
+    public static int SearchBarOpacityPercent { get; private set; } = 85;
+    public static float MenuFontScale { get; private set; } = 1f;
+    public static string MenuFontFamily { get; private set; } = "Consolas";
+    public static string AssetFolder => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "UtilMaster3000",
+        "theme-assets");
+
+    private static PrivateFontCollection? privateFontCollection;
+    private static FontFamily? privateFontFamily;
+    private static string configuredFontPath = "";
+    private static readonly Dictionary<string, Bitmap> skinBitmaps =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, string> skinPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, SkinImageAsset> skinSettings =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, Bitmap> buttonIcons =
+        new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, string> buttonIconPaths =
+        new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, SkinImageAsset> buttonIconSettings =
+        new(StringComparer.Ordinal);
+    private static Bitmap? sharedButtonIcon;
+    private static string sharedButtonIconPath = "";
+    private static SkinImageAsset sharedButtonIconSettings = new();
+    public static string? AssetLoadError { get; private set; }
 
     // ---- background ----
 
@@ -65,6 +100,7 @@ internal static class Theme
     public static int Align { get; private set; } = 4; // 0..8, row-major, 4 = centre
     public static float Strength { get; private set; } = 0.4f;
     public static bool HasBackground => BackgroundImage != null;
+    public static string? BackgroundLoadError { get; private set; }
 
     private static bool animated;
     private static Stream? backgroundStream;
@@ -104,12 +140,363 @@ internal static class Theme
             Apply(Presets.ContainsKey(s.ThemeName) ? s.ThemeName : "Tokyo Night", null);
         }
 
+        Color rowHighlight = string.IsNullOrWhiteSpace(s.CustomRowHighlight)
+            ? Mix(Background, Accent, 0.16f)
+            : Parse(s.CustomRowHighlight, ToHex(Mix(Background, Accent, 0.16f)));
+        Color searchBar = string.IsNullOrWhiteSpace(s.CustomTopBar)
+            ? Mix(Background, Accent, 0.12f)
+            : Parse(s.CustomTopBar, ToHex(Mix(Background, Accent, 0.12f)));
+        Color border = string.IsNullOrWhiteSpace(s.CustomBorder)
+            ? Accent
+            : Parse(s.CustomBorder, ToHex(Accent));
+
+        int brightness = Math.Clamp(s.ThemeBrightnessPercent, 60, 140);
+        Background = AdjustBrightness(Background, brightness);
+        Search = AdjustBrightness(Search, brightness);
+        Text = AdjustBrightness(Text, brightness);
+        Accent = AdjustBrightness(Accent, brightness);
+        Strong = AdjustBrightness(Strong, brightness);
+        On = AdjustBrightness(On, brightness);
+        Off = AdjustBrightness(Off, brightness);
+        ActiveRow = AdjustBrightness(rowHighlight, brightness);
+        SearchBar = AdjustBrightness(searchBar, brightness);
+        BorderColor = AdjustBrightness(border, brightness);
+
         Fit = Enum.IsDefined(typeof(BackgroundFit), s.BackgroundFit)
             ? (BackgroundFit)s.BackgroundFit
             : BackgroundFit.Fill;
 
         Align = Math.Clamp(s.BackgroundAlign, 0, 8);
         Strength = Math.Clamp(s.BackgroundStrength, 5, 100) / 100f;
+        MenuWidth = Math.Clamp(s.MenuWidth, 320, 520);
+        RowHeight = Math.Clamp(s.MenuRowHeight, 28, 48);
+        BorderThickness = Math.Clamp(s.BorderThickness, 1, 6);
+        CornerRadius = Math.Clamp(s.CornerRadius, 0, 24);
+        SearchBarOpacityPercent = Math.Clamp(s.TopBarOpacityPercent, 0, 100);
+        MenuFontScale = Math.Clamp(s.MenuFontScalePercent, 80, 140) / 100f;
+        ConfigureFont(s);
+    }
+
+    public static Font CreateMenuFont(float size, FontStyle style = FontStyle.Regular) =>
+        privateFontFamily != null
+            ? new Font(privateFontFamily, size, style)
+            : new Font(MenuFontFamily, size, style);
+
+    private static void ConfigureFont(AppSettings settings)
+    {
+        string path = settings.MenuFontPath ?? "";
+
+        if (!string.Equals(path, configuredFontPath, StringComparison.OrdinalIgnoreCase))
+        {
+            privateFontCollection?.Dispose();
+            privateFontCollection = null;
+            privateFontFamily = null;
+            configuredFontPath = path;
+
+            if (path.Length > 0 && File.Exists(path))
+            {
+                PrivateFontCollection collection = new();
+
+                try
+                {
+                    collection.AddFontFile(path);
+
+                    if (collection.Families.Length > 0)
+                    {
+                        privateFontCollection = collection;
+                        privateFontFamily = collection.Families[0];
+                    }
+                    else
+                    {
+                        collection.Dispose();
+                    }
+                }
+                catch
+                {
+                    collection.Dispose();
+                }
+            }
+        }
+
+        MenuFontFamily = privateFontFamily?.Name ??
+            (string.IsNullOrWhiteSpace(settings.MenuFontFamily)
+                ? "Consolas"
+                : settings.MenuFontFamily);
+    }
+
+    public static void ConfigureAssets(AppSettings settings)
+    {
+        AssetLoadError = null;
+        Dictionary<string, SkinImageAsset> configured =
+            settings.ThemeImages ?? new Dictionary<string, SkinImageAsset>();
+
+        foreach (string key in skinSettings.Keys.Except(configured.Keys).ToArray())
+        {
+            skinSettings.Remove(key);
+            RemoveBitmap(skinBitmaps, skinPaths, key);
+        }
+
+        foreach ((string key, SkinImageAsset asset) in configured)
+        {
+            skinSettings[key] = new SkinImageAsset
+            {
+                Path = asset.Path,
+                Fit = Enum.IsDefined(typeof(SkinImageFit), asset.Fit)
+                    ? asset.Fit
+                    : SkinImageFit.Cover,
+                Zoom = Math.Clamp(asset.Zoom, 1f, 4f),
+                CropX = Math.Clamp(asset.CropX, 0f, 1f),
+                CropY = Math.Clamp(asset.CropY, 0f, 1f)
+            };
+
+            UpdateBitmap(skinBitmaps, skinPaths, key, asset.Path, 1200);
+        }
+
+        Dictionary<string, SkinImageAsset> icons =
+            settings.CustomButtonIcons ?? new Dictionary<string, SkinImageAsset>();
+
+        foreach (string key in buttonIconPaths.Keys.Except(icons.Keys).ToArray())
+        {
+            RemoveBitmap(buttonIcons, buttonIconPaths, key);
+            buttonIconSettings.Remove(key);
+        }
+
+        foreach ((string key, SkinImageAsset asset) in icons)
+        {
+            buttonIconSettings[key] = CopyAssetSettings(asset);
+            UpdateBitmap(buttonIcons, buttonIconPaths, key, asset.Path, 128);
+        }
+
+        SkinImageAsset sharedAsset = settings.SharedButtonIcon ?? new SkinImageAsset();
+        string sharedPath = sharedAsset.Path ?? "";
+        sharedButtonIconSettings = CopyAssetSettings(sharedAsset);
+        if (!string.Equals(sharedPath, sharedButtonIconPath, StringComparison.OrdinalIgnoreCase))
+        {
+            sharedButtonIcon?.Dispose();
+            sharedButtonIcon = null;
+            sharedButtonIconPath = sharedPath;
+
+            if (sharedPath.Length > 0)
+            {
+                try
+                {
+                    sharedButtonIcon = LoadWithWic(sharedPath, 128);
+                }
+                catch (Exception ex)
+                {
+                    AssetLoadError ??= ex.Message;
+                }
+            }
+        }
+    }
+
+    public static bool DrawButtonIcon(
+        Graphics graphics,
+        string key,
+        Rectangle area,
+        float opacity,
+        bool allowSharedIcon = true)
+    {
+        if (buttonIcons.TryGetValue(key, out Bitmap? image) &&
+            buttonIconSettings.TryGetValue(key, out SkinImageAsset? settings))
+        {
+            DrawFittedImage(graphics, image, area, settings, opacity);
+            return true;
+        }
+
+        if (allowSharedIcon && sharedButtonIcon != null)
+        {
+            DrawFittedImage(
+                graphics,
+                sharedButtonIcon,
+                area,
+                sharedButtonIconSettings,
+                opacity);
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool DrawAsset(
+        Graphics graphics,
+        string key,
+        Rectangle area,
+        float opacity = 1f)
+    {
+        if (!skinBitmaps.TryGetValue(key, out Bitmap? image) ||
+            !skinSettings.TryGetValue(key, out SkinImageAsset? asset))
+        {
+            return false;
+        }
+
+        DrawFittedImage(graphics, image, area, asset, opacity);
+        return true;
+    }
+
+    public static void DrawFittedImage(
+        Graphics graphics,
+        Image image,
+        Rectangle area,
+        SkinImageAsset asset,
+        float opacity = 1f)
+    {
+        if (area.Width <= 0 || area.Height <= 0 ||
+            image.Width <= 0 || image.Height <= 0)
+        {
+            return;
+        }
+
+        GraphicsState state = graphics.Save();
+
+        try
+        {
+            graphics.SetClip(area, CombineMode.Intersect);
+            using ImageAttributes? attributes = opacity < 0.999f
+                ? new ImageAttributes()
+                : null;
+
+            if (attributes != null)
+            {
+                attributes.SetColorMatrix(new ColorMatrix
+                {
+                    Matrix33 = Math.Clamp(opacity, 0f, 1f)
+                });
+            }
+
+            if (asset.Fit == SkinImageFit.Stretch)
+            {
+                DrawFittedBitmap(graphics, image, area, attributes);
+                return;
+            }
+
+            if (asset.Fit == SkinImageFit.Tile)
+            {
+                float tileWidth = image.Width;
+                float tileHeight = image.Height;
+                float originX = area.X + (area.Width - tileWidth) * asset.CropX;
+                float originY = area.Y + (area.Height - tileHeight) * asset.CropY;
+                float startX = originX - (float)Math.Ceiling((originX - area.X) / tileWidth) * tileWidth;
+                float startY = originY - (float)Math.Ceiling((originY - area.Y) / tileHeight) * tileHeight;
+
+                for (float y = startY; y < area.Bottom; y += tileHeight)
+                {
+                    for (float x = startX; x < area.Right; x += tileWidth)
+                    {
+                        DrawFittedBitmap(
+                            graphics,
+                            image,
+                            new RectangleF(x, y, tileWidth, tileHeight),
+                            attributes);
+                    }
+                }
+
+                return;
+            }
+
+            float scale = Math.Max(
+                area.Width / (float)image.Width,
+                area.Height / (float)image.Height);
+            scale *= Math.Clamp(asset.Zoom, 1f, 4f);
+
+            float width = image.Width * scale;
+            float height = image.Height * scale;
+            DrawFittedBitmap(
+                graphics,
+                image,
+                new RectangleF(
+                    area.X + (area.Width - width) * Math.Clamp(asset.CropX, 0f, 1f),
+                    area.Y + (area.Height - height) * Math.Clamp(asset.CropY, 0f, 1f),
+                    width,
+                    height),
+                attributes);
+        }
+        finally
+        {
+            graphics.Restore(state);
+        }
+    }
+
+    private static void DrawFittedBitmap(
+        Graphics graphics,
+        Image image,
+        Rectangle area,
+        ImageAttributes? attributes) =>
+        DrawFittedBitmap(graphics, image, (RectangleF)area, attributes);
+
+    private static void DrawFittedBitmap(
+        Graphics graphics,
+        Image image,
+        RectangleF destination,
+        ImageAttributes? attributes)
+    {
+        if (attributes == null)
+        {
+            graphics.DrawImage(image, destination);
+            return;
+        }
+
+        graphics.DrawImage(
+            image,
+            Rectangle.Round(destination),
+            0,
+            0,
+            image.Width,
+            image.Height,
+            GraphicsUnit.Pixel,
+            attributes);
+    }
+
+    private static SkinImageAsset CopyAssetSettings(SkinImageAsset asset) => new()
+    {
+        Path = asset.Path,
+        Fit = Enum.IsDefined(typeof(SkinImageFit), asset.Fit)
+            ? asset.Fit
+            : SkinImageFit.Cover,
+        Zoom = Math.Clamp(asset.Zoom, 1f, 4f),
+        CropX = Math.Clamp(asset.CropX, 0f, 1f),
+        CropY = Math.Clamp(asset.CropY, 0f, 1f)
+    };
+
+    private static void UpdateBitmap(
+        Dictionary<string, Bitmap> images,
+        Dictionary<string, string> paths,
+        string key,
+        string path,
+        int maxDimension)
+    {
+        if (paths.TryGetValue(key, out string? previous) &&
+            string.Equals(previous, path, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        RemoveBitmap(images, paths, key);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            images[key] = LoadWithWic(path, maxDimension);
+            paths[key] = path;
+        }
+        catch (Exception ex)
+        {
+            paths[key] = path;
+            AssetLoadError ??= ex.Message;
+        }
+    }
+
+    private static void RemoveBitmap(
+        Dictionary<string, Bitmap> images,
+        Dictionary<string, string> paths,
+        string key)
+    {
+        if (images.Remove(key, out Bitmap? image))
+            image.Dispose();
+
+        paths.Remove(key);
     }
 
     private static void Apply(string name, object? _)
@@ -144,6 +531,17 @@ internal static class Theme
     private static double Luminance(Color c) =>
         (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255.0;
 
+    private static Color AdjustBrightness(Color color, int percent)
+    {
+        float scale = percent / 100f;
+
+        return Color.FromArgb(
+            color.A,
+            Math.Clamp((int)Math.Round(color.R * scale), 0, 255),
+            Math.Clamp((int)Math.Round(color.G * scale), 0, 255),
+            Math.Clamp((int)Math.Round(color.B * scale), 0, 255));
+    }
+
     public static Color Mix(Color a, Color b, float t)
     {
         t = Math.Clamp(t, 0f, 1f);
@@ -160,6 +558,7 @@ internal static class Theme
     public static bool LoadBackground(string? path)
     {
         ClearBackground();
+        BackgroundLoadError = null;
 
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return false;
@@ -193,38 +592,128 @@ internal static class Theme
                 double scale = Math.Min(1.0,
                     max / (double)Math.Max(loaded.Width, loaded.Height));
 
-                Bitmap prepared = new(
+                Bitmap? prepared = new(
                     Math.Max(1, (int)(loaded.Width * scale)),
                     Math.Max(1, (int)(loaded.Height * scale)),
                     PixelFormat.Format32bppPArgb);
 
-                using (Graphics g = Graphics.FromImage(prepared))
+                try
                 {
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(loaded, 0, 0, prepared.Width, prepared.Height);
+                    using (Graphics g = Graphics.FromImage(prepared))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(loaded, 0, 0, prepared.Width, prepared.Height);
+                    }
+
+                    animated = false;
+                    BackgroundImage = prepared;
+                    prepared = null;
+                }
+                finally
+                {
+                    prepared?.Dispose();
                 }
 
                 loaded.Dispose();
                 loaded = null;
                 stream.Dispose();
                 stream = null;
-
-                animated = false;
-                BackgroundImage = prepared;
             }
 
             return true;
         }
-        catch
+        catch (Exception gdiError)
         {
             ClearBackground();
-            return false;
+            loaded?.Dispose();
+            loaded = null;
+            stream?.Dispose();
+            stream = null;
+
+            try
+            {
+                BackgroundImage = LoadWithWic(path);
+                animated = false;
+                return true;
+            }
+            catch (Exception wicError)
+            {
+                ClearBackground();
+                BackgroundLoadError =
+                    $"{gdiError.Message}; WIC fallback: {wicError.Message}";
+                return false;
+            }
         }
         finally
         {
             loaded?.Dispose();
             stream?.Dispose();
         }
+    }
+
+    public static Bitmap LoadWithWic(string path, int maxDimension = 1200)
+    {
+        using FileStream stream = new(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read | FileShare.Delete);
+
+        System.Windows.Media.Imaging.BitmapDecoder decoder =
+            System.Windows.Media.Imaging.BitmapDecoder.Create(
+                stream,
+                System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+                System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+
+        System.Windows.Media.Imaging.BitmapSource source = decoder.Frames[0];
+        int max = Math.Max(1, maxDimension);
+        double scale = Math.Min(1.0,
+            max / (double)Math.Max(source.PixelWidth, source.PixelHeight));
+
+        if (scale < 1.0)
+        {
+            System.Windows.Media.Imaging.TransformedBitmap resized = new(
+                source,
+                new System.Windows.Media.ScaleTransform(scale, scale));
+            resized.Freeze();
+            source = resized;
+        }
+
+        System.Windows.Media.Imaging.FormatConvertedBitmap pixels = new(
+            source,
+            System.Windows.Media.PixelFormats.Pbgra32,
+            null,
+            0);
+        pixels.Freeze();
+
+        int stride = checked(pixels.PixelWidth * 4);
+        byte[] buffer = new byte[checked(stride * pixels.PixelHeight)];
+        pixels.CopyPixels(buffer, stride, 0);
+
+        Bitmap bitmap = new(
+            pixels.PixelWidth,
+            pixels.PixelHeight,
+            PixelFormat.Format32bppPArgb);
+        BitmapData data = bitmap.LockBits(
+            new Rectangle(0, 0, bitmap.Width, bitmap.Height),
+            ImageLockMode.WriteOnly,
+            PixelFormat.Format32bppPArgb);
+
+        try
+        {
+            Marshal.Copy(buffer, 0, data.Scan0, buffer.Length);
+        }
+        catch
+        {
+            bitmap.Dispose();
+            throw;
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
+
+        return bitmap;
     }
 
     private static void OnFrame(object? sender, EventArgs e) =>
@@ -349,13 +838,13 @@ internal static class Theme
 internal static class BackgroundMedia
 {
     private static readonly string[] ImageTypes =
-        { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
+        { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp" };
 
     private static readonly string[] VideoTypes =
         { ".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v" };
 
     public const string FileFilter =
-        "Images, GIFs and videos|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.mp4;*.webm;*.mov;*.mkv;*.avi;*.m4v" +
+        "Images, GIFs and videos|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.mp4;*.webm;*.mov;*.mkv;*.avi;*.m4v" +
         "|All files|*.*";
 
     public static string Folder => Path.Combine(

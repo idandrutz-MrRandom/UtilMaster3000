@@ -217,6 +217,8 @@ public sealed partial class MainForm
             }),
 
             ["Style"] = BuildStylePage(),
+            ["Customize"] = BuildCustomizePage(),
+            ["SkinAssets"] = BuildSkinAssetsPage(),
 
             ["Setup"] = Renumber(new[]
             {

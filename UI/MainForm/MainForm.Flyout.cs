@@ -451,12 +451,14 @@ public sealed partial class MainForm
 
         foreach (MenuEntry entry in entries)
         {
-            LauncherRow row = new(-2, entry.Icon, entry.Label, MonoFont);
+            LauncherRow row = new(-2, entry.Icon, entry.Label);
 
             if (entry.iconBitmap != null)
                 row.IconImage = entry.iconBitmap;
             else
                 AttachIcon(row, entry.iconPath);
+
+            row.CustomIconKey = MenuIconKey(page, entry);
 
             MenuEntry captured = entry;
 

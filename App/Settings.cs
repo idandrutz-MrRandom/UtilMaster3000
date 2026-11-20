@@ -17,6 +17,22 @@ internal enum NotificationPosition
     TopRight
 }
 
+internal enum SkinImageFit
+{
+    Stretch,
+    Cover,
+    Tile
+}
+
+internal sealed class SkinImageAsset
+{
+    public string Path { get; set; } = "";
+    public SkinImageFit Fit { get; set; } = SkinImageFit.Cover;
+    public float Zoom { get; set; } = 1f;
+    public float CropX { get; set; } = 0.5f;
+    public float CropY { get; set; } = 0.5f;
+}
+
 // ======================================================
 // PERSISTED SETTINGS  (%AppData%\UtilMaster3000\settings.json)
 // ======================================================
@@ -121,6 +137,23 @@ internal sealed class AppSettings
     public string CustomBackground { get; set; } = "";
     public string CustomAccent { get; set; } = "";
     public string CustomText { get; set; } = "";
+    // Legacy "TopBar" setting names are retained for settings.json compatibility.
+    public string CustomTopBar { get; set; } = "";
+    public string CustomRowHighlight { get; set; } = "";
+    public string CustomBorder { get; set; } = "";
+    public bool TopBarBackgroundEnabled { get; set; }
+    public int TopBarOpacityPercent { get; set; } = 85;
+    public int ThemeBrightnessPercent { get; set; } = 100;
+    public int MenuFontScalePercent { get; set; } = 100;
+    public string MenuFontFamily { get; set; } = "";
+    public string MenuFontPath { get; set; } = "";
+    public int MenuWidth { get; set; } = 380;
+    public int MenuRowHeight { get; set; } = 32;
+    public int BorderThickness { get; set; } = 2;
+    public int CornerRadius { get; set; }
+    public Dictionary<string, SkinImageAsset> ThemeImages { get; set; } = new();
+    public SkinImageAsset SharedButtonIcon { get; set; } = new();
+    public Dictionary<string, SkinImageAsset> CustomButtonIcons { get; set; } = new();
 
     // Copy of the chosen image / GIF / converted video, inside AppData.
     public string BackgroundPath { get; set; } = "";
@@ -162,9 +195,23 @@ internal sealed class AppSettings
 
             if (File.Exists(FilePath))
             {
-                return JsonSerializer.Deserialize<AppSettings>(
+                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(
                     File.ReadAllText(FilePath)
                 ) ?? new AppSettings();
+
+                settings.ThemeImages ??= new Dictionary<string, SkinImageAsset>();
+                settings.CustomButtonIcons ??= new Dictionary<string, SkinImageAsset>();
+                settings.SharedButtonIcon ??= new SkinImageAsset();
+
+                if (settings.ThemeImages.TryGetValue("topbar", out SkinImageAsset? topBarImage))
+                {
+                    if (!settings.ThemeImages.ContainsKey("search"))
+                        settings.ThemeImages["search"] = topBarImage;
+
+                    settings.ThemeImages.Remove("topbar");
+                }
+
+                return settings;
             }
         }
         catch

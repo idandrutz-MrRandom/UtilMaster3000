@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Text;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +13,9 @@ namespace UtilMaster3000;
 // Customisation: themes, colours and a background image / GIF / video.
 public sealed partial class MainForm
 {
+    private const string SkinImageFilter =
+        "Image files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff|All files|*.*";
+
     private static readonly string[] FitNames =
         { "fill", "fit", "stretch", "original size", "tile" };
 
@@ -22,7 +27,14 @@ public sealed partial class MainForm
     };
 
     private static readonly int[] StrengthChoices = { 15, 25, 40, 60, 85, 100 };
-    private static readonly int[] OpacityChoices = { 70, 80, 90, 100 };
+    private static readonly int[] OpacityChoices = { 30, 40, 50, 60, 70, 80, 90, 100 };
+    private static readonly int[] SearchBarOpacityChoices = { 25, 40, 55, 70, 85, 100 };
+    private static readonly int[] BrightnessChoices = { 70, 85, 100, 115, 130 };
+    private static readonly int[] FontScaleChoices = { 80, 90, 100, 110, 120, 130, 140 };
+    private static readonly int[] MenuWidthChoices = { 320, 360, 380, 420, 460, 500 };
+    private static readonly int[] RowHeightChoices = { 28, 30, 32, 36, 40, 44, 48 };
+    private static readonly int[] BorderThicknessChoices = { 1, 2, 3, 4, 5, 6 };
+    private static readonly int[] CornerChoices = { 0, 6, 12, 18, 24 };
 
     private int framePending;
 
@@ -33,7 +45,7 @@ public sealed partial class MainForm
     // Called after the interface exists.
     private void InitAppearance()
     {
-        restingOpacity = Math.Clamp(settings.LauncherOpacity, 40, 100) / 100.0;
+        restingOpacity = Math.Clamp(settings.LauncherOpacity, 30, 100) / 100.0;
         targetOpacity = restingOpacity;
         Opacity = restingOpacity;
 
@@ -71,8 +83,26 @@ public sealed partial class MainForm
     private void ApplyAppearance(bool reloadBackground)
     {
         Theme.Configure(settings);
+        Theme.ConfigureAssets(settings);
 
-        restingOpacity = Math.Clamp(settings.LauncherOpacity, 40, 100) / 100.0;
+        ClientSize = new Size(WindowWidth, ClientSize.Height);
+        breadcrumb.Size = new Size(MenuWidth, 25);
+        menuBox.Width = MenuWidth;
+        menuBox.CornerRadius = Theme.CornerRadius;
+        searchBackground.Width = RowsWidth;
+        searchBackground.CornerRadius = Math.Min(Theme.CornerRadius, 14);
+        searchBox.Width = RowsWidth - 16;
+        rowsPanel.Width = RowsWidth;
+        statusLabel.Width = RowsWidth;
+
+        SetScaledFont(breadcrumb, 11f, FontStyle.Bold);
+        SetScaledFont(searchBox, 9f);
+        SetScaledFont(statusLabel, 8f);
+
+        foreach (LauncherRow row in visibleRows)
+            row.ApplyAppearance();
+
+        restingOpacity = Math.Clamp(settings.LauncherOpacity, 30, 100) / 100.0;
 
         if (!hiding)
         {
@@ -86,9 +116,19 @@ public sealed partial class MainForm
             Theme.LoadBackground(settings.BackgroundPath);
 
         menuBox.BackColor = Theme.Background;
-        searchBackground.BackColor = Theme.Search;
-        searchBox.BackColor = Theme.Search;
+        Color searchBarColor = settings.TopBarBackgroundEnabled
+            ? Theme.SearchBar
+            : Theme.Search;
+        int searchBarOpacity = settings.TopBarBackgroundEnabled
+            ? Theme.SearchBarOpacityPercent
+            : 100;
+        searchBackground.BackColor = Color.FromArgb(
+            searchBarOpacity * 255 / 100,
+            searchBarColor);
+        searchBox.BackColor = searchBarColor;
         searchBox.ForeColor = Theme.Strong;
+        searchBackground.Invalidate();
+        searchBox.Invalidate();
 
         breadcrumb.FillColor = Theme.Strong;
         breadcrumb.OutlineColor = Theme.Background;
@@ -101,6 +141,25 @@ public sealed partial class MainForm
 
         // Rebuild the rows so they pick up the new colours / transparency.
         RefreshPage();
+    }
+
+    private static void SetScaledFont(Control control, float baseSize, FontStyle style = FontStyle.Regular)
+    {
+        float size = baseSize * Theme.MenuFontScale;
+
+        if (Math.Abs(control.Font.Size - size) < 0.1f &&
+            control.Font.Style == style &&
+            string.Equals(
+                control.Font.FontFamily.Name,
+                Theme.MenuFontFamily,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Font old = control.Font;
+        control.Font = Theme.CreateMenuFont(size, style);
+        old.Dispose();
     }
 
     // --------------------------------------------------
@@ -131,6 +190,8 @@ public sealed partial class MainForm
             Act("", "Background colour...", () => PickThemeColor("background")),
             Act("", "Accent colour...", () => PickThemeColor("accent")),
             Act("", "Text colour...", () => PickThemeColor("text")),
+
+            Act("", "More customization...", () => ShowPage("Customize")),
 
             Act("", "Background image / GIF / video...", ChooseBackground)
         };
@@ -164,22 +225,129 @@ public sealed partial class MainForm
             }));
         }
 
-        list.Add(Act("", $"Window opacity: {OpacityValue()}%", () =>
-        {
-            int next = (Array.IndexOf(OpacityChoices, OpacityValue()) + 1)
-                % OpacityChoices.Length;
-
-            settings.LauncherOpacity = OpacityChoices[next];
-            SaveSettings();
-            ApplyAppearance(reloadBackground: false);
-        }));
-
         list.Add(new MenuEntry(0, "\uE7E7", "Notifications...", targetPage: "Notifications"));
 
         list.Add(Act("", "Reset appearance", ResetAppearance));
         list.Add(BackEntry());
 
         return Renumber(list);
+    }
+
+    private List<MenuEntry> BuildCustomizePage()
+    {
+        List<MenuEntry> list = new()
+        {
+            Act("", $"Search bar custom background: {(settings.TopBarBackgroundEnabled ? "on" : "off")}", () =>
+            {
+                settings.TopBarBackgroundEnabled = !settings.TopBarBackgroundEnabled;
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", "Search bar color...", () => PickCustomizeColor("searchbar")),
+            Act("", $"Search bar opacity: {Theme.SearchBarOpacityPercent}%", () =>
+            {
+                settings.TopBarOpacityPercent = NextChoice(
+                    Theme.SearchBarOpacityPercent,
+                    SearchBarOpacityChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Theme brightness: {settings.ThemeBrightnessPercent}%", () =>
+            {
+                settings.ThemeBrightnessPercent = NextChoice(
+                    settings.ThemeBrightnessPercent,
+                    BrightnessChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", "Active row color...", () => PickCustomizeColor("row")),
+            Act("", "Border color...", () => PickCustomizeColor("border")),
+            Act("", $"Border thickness: {Theme.BorderThickness}px", () =>
+            {
+                settings.BorderThickness = NextChoice(
+                    Theme.BorderThickness,
+                    BorderThicknessChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Font size: {settings.MenuFontScalePercent}%", () =>
+            {
+                settings.MenuFontScalePercent = NextChoice(
+                    settings.MenuFontScalePercent,
+                    FontScaleChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Font: {Theme.MenuFontFamily}", ChooseInstalledFont),
+            Act("", "Load font file...", ChooseFontFile),
+            Act("", "Skin images and icons...", () => ShowPage("SkinAssets")),
+            Act("", $"Menu width: {Theme.MenuWidth}px", () =>
+            {
+                settings.MenuWidth = NextChoice(Theme.MenuWidth, MenuWidthChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Row height: {Theme.RowHeight}px", () =>
+            {
+                settings.MenuRowHeight = NextChoice(
+                    Theme.RowHeight,
+                    RowHeightChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Menu opacity: {OpacityValue()}%", () =>
+            {
+                settings.LauncherOpacity = NextChoice(
+                    OpacityValue(),
+                    OpacityChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            Act("", $"Corner radius: {Theme.CornerRadius}px", () =>
+            {
+                settings.CornerRadius = NextChoice(
+                    Theme.CornerRadius,
+                    CornerChoices);
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+            BackEntry()
+        };
+
+        return Renumber(list);
+    }
+
+    private List<MenuEntry> BuildSkinAssetsPage()
+    {
+        List<MenuEntry> list = new()
+        {
+            Act("", $"Menu row image: {AssetStatus("row")}", () => ManageSkinImage("row")),
+            Act("", $"Frame image: {AssetStatus("frame")}", () => ManageSkinImage("frame")),
+            Act("", $"Search bar image: {AssetStatus("search")}", () => ManageSkinImage("search")),
+            Act("", $"Shared button icon: {SharedButtonIconStatus()}", ManageSharedButtonIcon),
+            Act("", "Per-item button icons...", ChoosePerItemButtonIcon),
+            Act("", "Clear all skin images and icons", ClearSkinImages),
+            BackEntry()
+        };
+
+        return Renumber(list);
+    }
+
+    private string AssetStatus(string role) =>
+        settings.ThemeImages.TryGetValue(role, out SkinImageAsset? asset) &&
+        !string.IsNullOrWhiteSpace(asset.Path)
+            ? "set"
+            : "not set";
+
+    private string SharedButtonIconStatus() =>
+        !string.IsNullOrWhiteSpace(settings.SharedButtonIcon?.Path)
+            ? "set"
+            : "not set";
+
+    private static int NextChoice(int current, int[] choices)
+    {
+        int index = Array.IndexOf(choices, current);
+        return choices[(Math.Max(0, index) + 1) % choices.Length];
     }
 
     private int FitIndex() =>
@@ -197,6 +365,525 @@ public sealed partial class MainForm
         OpacityChoices.Contains(settings.LauncherOpacity)
             ? settings.LauncherOpacity
             : 100;
+
+    private void PickCustomizeColor(string which)
+    {
+        Color current = which switch
+        {
+            "searchbar" => Theme.SearchBar,
+            "row" => Theme.ActiveRow,
+            _ => Theme.BorderColor
+        };
+
+        using ColorDialog dialog = new()
+        {
+            Color = current,
+            FullOpen = true,
+            AnyColor = true
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string color = Theme.ToHex(dialog.Color);
+
+        switch (which)
+        {
+            case "searchbar":
+                settings.CustomTopBar = color;
+                settings.TopBarBackgroundEnabled = true;
+                break;
+            case "row":
+                settings.CustomRowHighlight = color;
+                break;
+            default:
+                settings.CustomBorder = color;
+                break;
+        }
+
+        SaveSettings();
+        ApplyAppearance(reloadBackground: false);
+    }
+
+    private void ChooseInstalledFont()
+    {
+        using Font current = Theme.CreateMenuFont(9f * Theme.MenuFontScale);
+        using FontDialog dialog = new()
+        {
+            Font = current,
+            ShowColor = false,
+            ShowEffects = false
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        settings.MenuFontFamily = dialog.Font.FontFamily.Name;
+        settings.MenuFontPath = "";
+        SaveSettings();
+        ApplyAppearance(reloadBackground: false);
+    }
+
+    private void ChooseFontFile()
+    {
+        using OpenFileDialog dialog = new()
+        {
+            Title = "Choose a font file",
+            Filter = "Font files|*.ttf;*.otf;*.ttc|All files|*.*"
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            using PrivateFontCollection fonts = new();
+            fonts.AddFontFile(dialog.FileName);
+
+            if (fonts.Families.Length == 0)
+                throw new InvalidDataException("The selected file contains no usable font.");
+
+            Directory.CreateDirectory(Theme.AssetFolder);
+            string extension = Path.GetExtension(dialog.FileName);
+            string target = Path.Combine(
+                Theme.AssetFolder,
+                "font-" + Guid.NewGuid().ToString("N") + extension);
+            File.Copy(dialog.FileName, target);
+
+            settings.MenuFontFamily = fonts.Families[0].Name;
+            settings.MenuFontPath = target;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            Say("Font", "Could not load that font:\n\n" + ex.Message);
+        }
+    }
+
+    private void ManageSkinImage(string role)
+    {
+        if (!settings.ThemeImages.TryGetValue(role, out SkinImageAsset? asset) ||
+            string.IsNullOrWhiteSpace(asset.Path) ||
+            !File.Exists(asset.Path))
+        {
+            ChooseSkinImage(role);
+            return;
+        }
+
+        DialogResult choice = MessageBox.Show(
+            this,
+            "Yes: replace this image\nNo: adjust its crop and fit",
+            $"Manage {role} image",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Question);
+
+        if (choice == DialogResult.Yes)
+            ChooseSkinImage(role);
+        else if (choice == DialogResult.No)
+            EditSkinImage(role);
+    }
+
+    private void ChooseSkinImage(string role)
+    {
+        using OpenFileDialog picker = new()
+        {
+            Title = $"Choose the {role} image",
+            Filter = SkinImageFilter
+        };
+
+        if (picker.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string? copiedPath = null;
+
+        try
+        {
+            copiedPath = CopySkinImage(picker.FileName, role);
+
+            using Bitmap preview = Theme.LoadWithWic(copiedPath);
+            SkinImageAsset initial = new() { Path = copiedPath };
+            using ImageAssetCropDialog crop = new(
+                $"Position {role} image",
+                preview,
+                SkinAssetPreviewSize(role),
+                initial);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+            {
+                File.Delete(copiedPath);
+                return;
+            }
+
+            settings.ThemeImages[role] = crop.Result;
+
+            if (role == "search")
+                settings.TopBarBackgroundEnabled = true;
+
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            if (copiedPath != null && File.Exists(copiedPath))
+                File.Delete(copiedPath);
+
+            Say("Skin image", "Could not use that image:\n\n" + ex.Message);
+        }
+    }
+
+    private void EditSkinImage(string role)
+    {
+        if (!settings.ThemeImages.TryGetValue(role, out SkinImageAsset? asset))
+            return;
+
+        try
+        {
+            using Bitmap preview = Theme.LoadWithWic(asset.Path);
+            using ImageAssetCropDialog crop = new(
+                $"Position {role} image",
+                preview,
+                SkinAssetPreviewSize(role),
+                asset);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            settings.ThemeImages[role] = crop.Result;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            Say("Skin image", "Could not edit that image:\n\n" + ex.Message);
+        }
+    }
+
+    private static Size SkinAssetPreviewSize(string role) => role switch
+    {
+        "row" => new Size(Theme.MenuWidth - 28, Theme.RowHeight),
+        "frame" => new Size(Theme.MenuWidth, 388),
+        "search" => new Size(Theme.MenuWidth - 28, 28),
+        _ => new Size(22, 22)
+    };
+
+    private static string CopySkinImage(string source, string name)
+    {
+        Directory.CreateDirectory(Theme.AssetFolder);
+        string target = Path.Combine(
+            Theme.AssetFolder,
+            name + "-" + Guid.NewGuid().ToString("N") +
+            Path.GetExtension(source).ToLowerInvariant());
+
+        File.Copy(source, target);
+        return target;
+    }
+
+    private void ChooseSharedButtonIcon()
+    {
+        using OpenFileDialog picker = new()
+        {
+            Title = "Choose a shared button icon",
+            Filter = SkinImageFilter
+        };
+
+        if (picker.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string? copiedPath = null;
+
+        try
+        {
+            copiedPath = CopySkinImage(picker.FileName, "shared-icon");
+            using Bitmap preview = Theme.LoadWithWic(copiedPath, 128);
+            SkinImageAsset initial = new() { Path = copiedPath };
+            using ImageAssetCropDialog crop = new(
+                "Position shared button icon",
+                preview,
+                new Size(22, 22),
+                initial);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+            {
+                File.Delete(copiedPath);
+                return;
+            }
+
+            settings.SharedButtonIcon = crop.Result;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            if (copiedPath != null && File.Exists(copiedPath))
+                File.Delete(copiedPath);
+
+            Say("Button icon", "Could not use that image:\n\n" + ex.Message);
+        }
+    }
+
+    private void ManageSharedButtonIcon()
+    {
+        SkinImageAsset asset = settings.SharedButtonIcon;
+
+        if (string.IsNullOrWhiteSpace(asset.Path) || !File.Exists(asset.Path))
+        {
+            ChooseSharedButtonIcon();
+            return;
+        }
+
+        DialogResult choice = MessageBox.Show(
+            this,
+            "Yes: replace this icon\nNo: adjust its crop and fit",
+            "Manage shared button icon",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Question);
+
+        if (choice == DialogResult.Yes)
+        {
+            ChooseSharedButtonIcon();
+        }
+        else if (choice == DialogResult.No)
+        {
+            EditSharedButtonIcon(asset);
+        }
+    }
+
+    private void EditSharedButtonIcon(SkinImageAsset asset)
+    {
+        try
+        {
+            using Bitmap preview = Theme.LoadWithWic(asset.Path, 128);
+            using ImageAssetCropDialog crop = new(
+                "Position shared button icon",
+                preview,
+                new Size(22, 22),
+                asset);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            settings.SharedButtonIcon = crop.Result;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            Say("Button icon", "Could not edit that image:\n\n" + ex.Message);
+        }
+    }
+
+    private sealed record MenuIconTarget(string Key, string Label);
+
+    private void ChoosePerItemButtonIcon()
+    {
+        List<MenuIconTarget> targets = new();
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
+        void AddTarget(string page, MenuEntry entry)
+        {
+            if (entry.command == "back")
+                return;
+
+            string key = MenuIconKey(page, entry);
+
+            if (seen.Add(key))
+                targets.Add(new MenuIconTarget(key, $"{page} / {entry.Label}"));
+        }
+
+        foreach (MenuEntry entry in mainEntries)
+            AddTarget("home", entry);
+
+        foreach ((string page, List<MenuEntry> entries) in pages)
+        {
+            foreach (MenuEntry entry in entries)
+                AddTarget(page, entry);
+        }
+
+        using Form picker = new()
+        {
+            Text = "Choose a menu item",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ClientSize = new Size(500, 440)
+        };
+
+        ListBox list = new()
+        {
+            Location = new Point(12, 12),
+            Size = new Size(476, 350),
+            DataSource = targets,
+            DisplayMember = nameof(MenuIconTarget.Label)
+        };
+        picker.Controls.Add(list);
+
+        Button assign = new()
+        {
+            Text = "Choose icon...",
+            Location = new Point(12, 375),
+            Size = new Size(130, 32)
+        };
+        assign.Click += (_, _) =>
+        {
+            if (list.SelectedItem is MenuIconTarget selected)
+                AssignMenuIcon(selected);
+        };
+        picker.Controls.Add(assign);
+
+        Button remove = new()
+        {
+            Text = "Remove override",
+            Location = new Point(278, 375),
+            Size = new Size(122, 32)
+        };
+        remove.Click += (_, _) =>
+        {
+            if (list.SelectedItem is not MenuIconTarget selected)
+                return;
+
+            settings.CustomButtonIcons.Remove(selected.Key);
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        };
+        picker.Controls.Add(remove);
+
+        Button edit = new()
+        {
+            Text = "Edit crop...",
+            Location = new Point(150, 375),
+            Size = new Size(122, 32)
+        };
+        edit.Click += (_, _) =>
+        {
+            if (list.SelectedItem is not MenuIconTarget selected)
+                return;
+
+            if (settings.CustomButtonIcons.TryGetValue(
+                    selected.Key,
+                    out SkinImageAsset? asset) &&
+                !string.IsNullOrWhiteSpace(asset.Path) &&
+                File.Exists(asset.Path))
+            {
+                EditMenuIcon(selected, asset);
+            }
+            else
+            {
+                AssignMenuIcon(selected);
+            }
+        };
+        picker.Controls.Add(edit);
+
+        Button close = new()
+        {
+            Text = "Close",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(408, 375),
+            Size = new Size(80, 32)
+        };
+        picker.Controls.Add(close);
+        picker.CancelButton = close;
+
+        picker.ShowDialog(this);
+    }
+
+    private void AssignMenuIcon(MenuIconTarget target)
+    {
+        using OpenFileDialog picker = new()
+        {
+            Title = "Choose this menu item's icon",
+            Filter = SkinImageFilter
+        };
+
+        if (picker.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string? copiedPath = null;
+
+        try
+        {
+            copiedPath = CopySkinImage(picker.FileName, "button-icon");
+            using Bitmap preview = Theme.LoadWithWic(copiedPath, 128);
+            SkinImageAsset initial = settings.CustomButtonIcons.TryGetValue(
+                target.Key,
+                out SkinImageAsset? current)
+                    ? new SkinImageAsset
+                    {
+                        Path = copiedPath,
+                        Fit = current.Fit,
+                        Zoom = current.Zoom,
+                        CropX = current.CropX,
+                        CropY = current.CropY
+                    }
+                    : new SkinImageAsset { Path = copiedPath };
+
+            using ImageAssetCropDialog crop = new(
+                $"Position icon for {target.Label}",
+                preview,
+                new Size(22, 22),
+                initial);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+            {
+                File.Delete(copiedPath);
+                return;
+            }
+
+            settings.CustomButtonIcons[target.Key] = crop.Result;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            if (copiedPath != null && File.Exists(copiedPath))
+                File.Delete(copiedPath);
+
+            Say("Button icon", "Could not use that image:\n\n" + ex.Message);
+        }
+    }
+
+    private void EditMenuIcon(MenuIconTarget target, SkinImageAsset asset)
+    {
+        try
+        {
+            using Bitmap preview = Theme.LoadWithWic(asset.Path, 128);
+            using ImageAssetCropDialog crop = new(
+                $"Position icon for {target.Label}",
+                preview,
+                new Size(22, 22),
+                asset);
+
+            if (crop.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            settings.CustomButtonIcons[target.Key] = crop.Result;
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+        catch (Exception ex)
+        {
+            Say("Button icon", "Could not edit that image:\n\n" + ex.Message);
+        }
+    }
+
+    private void ClearSkinImages()
+    {
+        DialogResult answer = MessageBox.Show(
+            "Remove all custom skin images and button icons?",
+            "Clear skin images",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        settings.ThemeImages.Clear();
+        settings.SharedButtonIcon = new SkinImageAsset();
+        settings.CustomButtonIcons.Clear();
+        SaveSettings();
+        ApplyAppearance(reloadBackground: false);
+    }
 
     // --------------------------------------------------
     // COLOURS
@@ -264,7 +951,7 @@ public sealed partial class MainForm
         if (!BackgroundMedia.IsSupported(source))
         {
             Say("Background", "That file type is not supported.\n\n" +
-                "Use PNG, JPG, BMP, GIF, or a video (MP4, WebM, MOV, MKV, AVI).");
+                "Use PNG, JPG, BMP, GIF, WebP, or a video (MP4, WebM, MOV, MKV, AVI).");
             return;
         }
 
@@ -320,7 +1007,10 @@ public sealed partial class MainForm
         if (Theme.HasBackground)
             Toast("Background set", OnColor);
         else
-            Toast("Could not load that image", OffColor);
+            Toast(
+                "Image failed: " +
+                Trunc(Theme.BackgroundLoadError ?? "Unknown image error.", 60),
+                OffColor);
     }
 
     private void RemoveBackground()
@@ -352,6 +1042,22 @@ public sealed partial class MainForm
         settings.CustomBackground = "";
         settings.CustomAccent = "";
         settings.CustomText = "";
+        settings.CustomTopBar = "";
+        settings.CustomRowHighlight = "";
+        settings.CustomBorder = "";
+        settings.TopBarBackgroundEnabled = false;
+        settings.TopBarOpacityPercent = 85;
+        settings.ThemeBrightnessPercent = 100;
+        settings.MenuFontScalePercent = 100;
+        settings.MenuWidth = 380;
+        settings.MenuRowHeight = 32;
+        settings.BorderThickness = 2;
+        settings.CornerRadius = 0;
+        settings.MenuFontFamily = "";
+        settings.MenuFontPath = "";
+        settings.ThemeImages.Clear();
+        settings.SharedButtonIcon = new SkinImageAsset();
+        settings.CustomButtonIcons.Clear();
         settings.BackgroundPath = "";
         settings.BackgroundFit = 0;
         settings.BackgroundAlign = 4;

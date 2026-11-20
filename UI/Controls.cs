@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace UtilMaster3000;
@@ -12,6 +13,8 @@ namespace UtilMaster3000;
 
 internal class DoublePanel : Panel
 {
+    private int cornerRadius;
+
     public DoublePanel()
     {
         DoubleBuffered = true;
@@ -19,6 +22,69 @@ internal class DoublePanel : Panel
 
         // Lets BackColor = Transparent show the parent's background image.
         SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+    }
+
+    public int CornerRadius
+    {
+        get => cornerRadius;
+        set
+        {
+            int next = Math.Max(0, value);
+
+            if (cornerRadius == next)
+                return;
+
+            cornerRadius = next;
+            UpdateRegion();
+            Invalidate();
+        }
+    }
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        UpdateRegion();
+    }
+
+    public static GraphicsPath RoundedPath(Rectangle bounds, int radius)
+    {
+        GraphicsPath path = new();
+        int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+
+        if (diameter < 2)
+        {
+            path.AddRectangle(bounds);
+            return path;
+        }
+
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private void UpdateRegion()
+    {
+        Region? old = Region;
+        int radius = Math.Min(
+            cornerRadius,
+            Math.Min(Width, Height) / 2);
+
+        if (radius == 0 || Width <= 0 || Height <= 0)
+        {
+            Region = null;
+            old?.Dispose();
+            return;
+        }
+
+        using GraphicsPath path = RoundedPath(
+            new Rectangle(0, 0, Width, Height),
+            radius);
+
+        Region = new Region(path);
+        old?.Dispose();
     }
 }
 
@@ -110,14 +176,17 @@ internal sealed class LauncherRow : Control
     private string iconText;
     private string labelText;
 
-    private readonly Font indexFont;
-    private readonly Font iconFont;
-    private readonly Font labelFont;
+    private Font indexFont;
+    private Font iconFont;
+    private Font labelFont;
+    private float fontScale;
+    private string fontFamilyName;
+    private readonly bool useThemeFont;
 
     private bool active;
 
     // ---- hover reveal: long text / a picture unfolds under the row ----
-    public const int BaseHeight = 32;
+    public static int BaseHeight => Theme.RowHeight;
     private const float RevealDelay = 0.12f;
 
     private string? revealText;
@@ -200,6 +269,7 @@ internal sealed class LauncherRow : Control
     }
 
     private Image? iconImage;
+    private string? customIconKey;
 
     /// <summary>Real app / file icon; drawn instead of the glyph when set.</summary>
     public Image? IconImage
@@ -208,6 +278,19 @@ internal sealed class LauncherRow : Control
         set
         {
             iconImage = value;
+            Invalidate();
+        }
+    }
+
+    public string? CustomIconKey
+    {
+        get => customIconKey;
+        set
+        {
+            if (customIconKey == value)
+                return;
+
+            customIconKey = value;
             Invalidate();
         }
     }
@@ -330,16 +413,41 @@ internal sealed class LauncherRow : Control
     public LauncherRow(
         int index,
         string icon,
+        string label)
+        : this(index, icon, label, "", useThemeFont: true)
+    {
+    }
+
+    public LauncherRow(
+        int index,
+        string icon,
         string label,
         string monoFont)
+        : this(index, icon, label, monoFont, useThemeFont: false)
+    {
+    }
+
+    private LauncherRow(
+        int index,
+        string icon,
+        string label,
+        string monoFont,
+        bool useThemeFont)
     {
         indexText = IndexText(index);
         iconText = icon;
         labelText = label;
+        this.useThemeFont = useThemeFont;
 
-        indexFont = new Font(monoFont, 8f);
-        iconFont = new Font("Segoe MDL2 Assets", 14f);
-        labelFont = new Font(monoFont, 9f);
+        fontScale = useThemeFont ? Theme.MenuFontScale : 1f;
+        fontFamilyName = useThemeFont ? Theme.MenuFontFamily : monoFont;
+        indexFont = useThemeFont
+            ? Theme.CreateMenuFont(8f * fontScale)
+            : new Font(monoFont, 8f);
+        iconFont = new Font("Segoe MDL2 Assets", 14f * fontScale);
+        labelFont = useThemeFont
+            ? Theme.CreateMenuFont(9f * fontScale)
+            : new Font(monoFont, 9f);
 
         SetStyle(
             ControlStyles.SupportsTransparentBackColor |
@@ -354,6 +462,27 @@ internal sealed class LauncherRow : Control
         BackColor = Theme.HasBackground ? Color.Transparent : BackgroundColor;
         Cursor = Cursors.Hand;
 
+    }
+
+    public void ApplyAppearance()
+    {
+        if (useThemeFont &&
+            (Math.Abs(fontScale - Theme.MenuFontScale) > 0.001f ||
+             fontFamilyName != Theme.MenuFontFamily))
+        {
+            indexFont.Dispose();
+            iconFont.Dispose();
+            labelFont.Dispose();
+
+            fontScale = Theme.MenuFontScale;
+            fontFamilyName = Theme.MenuFontFamily;
+            indexFont = Theme.CreateMenuFont(8f * fontScale);
+            iconFont = new Font("Segoe MDL2 Assets", 14f * fontScale);
+            labelFont = Theme.CreateMenuFont(9f * fontScale);
+        }
+
+        BackColor = Theme.HasBackground ? Color.Transparent : BackgroundColor;
+        Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -374,21 +503,23 @@ internal sealed class LauncherRow : Control
 
         Color numberColor = Lerp(background, NumberText, eased);
 
-        if (Theme.HasBackground)
-        {
-            // Background image behind: only tint the highlighted row.
-            if (hover > 0.01f)
-            {
-                using SolidBrush tint = new(Color.FromArgb(
-                    (int)(200 * hover), ActiveBackground));
+        bool customBackground = Theme.DrawAsset(
+            e.Graphics,
+            "row",
+            ClientRectangle);
 
-                e.Graphics.FillRectangle(tint, ClientRectangle);
-            }
-        }
-        else
+        if (!customBackground && !Theme.HasBackground)
         {
             using SolidBrush bg = new(background);
             e.Graphics.FillRectangle(bg, ClientRectangle);
+        }
+
+        if (hover > 0.01f)
+        {
+            using SolidBrush tint = new(Color.FromArgb(
+                (int)(200 * hover), ActiveBackground));
+
+            e.Graphics.FillRectangle(tint, ClientRectangle);
         }
 
         TextRenderer.DrawText(
@@ -402,12 +533,18 @@ internal sealed class LauncherRow : Control
             TextFormatFlags.NoPadding
         );
 
-        if (iconImage != null)
+        Rectangle iconTarget = new(
+            38 + shift, (BaseHeight - 22) / 2, 22, 22);
+        bool customIcon = Theme.DrawButtonIcon(
+            e.Graphics,
+            customIconKey ?? "",
+            iconTarget,
+            eased,
+            allowSharedIcon: iconImage == null);
+
+        if (!customIcon && iconImage != null)
         {
             // Real app / file icon, faded in with the row.
-            Rectangle target = new(
-                38 + shift, (BaseHeight - 22) / 2, 22, 22);
-
             e.Graphics.InterpolationMode =
                 System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
 
@@ -420,13 +557,13 @@ internal sealed class LauncherRow : Control
 
             e.Graphics.DrawImage(
                 iconImage,
-                target,
+                iconTarget,
                 0, 0, iconImage.Width, iconImage.Height,
                 GraphicsUnit.Pixel,
                 attributes
             );
         }
-        else
+        else if (!customIcon && iconImage == null)
         {
             TextRenderer.DrawText(
                 e.Graphics,
