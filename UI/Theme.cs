@@ -67,6 +67,7 @@ internal static class Theme
     public static bool HasBackground => BackgroundImage != null;
 
     private static bool animated;
+    private static Stream? backgroundStream;
 
     /// <summary>Raised (from a worker thread) when a GIF moves to its next frame.</summary>
     public static event Action? FrameChanged;
@@ -163,18 +164,26 @@ internal static class Theme
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return false;
 
+        Stream? stream = null;
+        Image? loaded = null;
+
         try
         {
-            // Read into memory so the file is not locked.
-            byte[] data = File.ReadAllBytes(path);
-            MemoryStream stream = new(data);
-            Image loaded = Image.FromStream(stream);
+            stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete);
+            loaded = Image.FromStream(stream);
 
             if (ImageAnimator.CanAnimate(loaded))
             {
                 animated = true;
                 BackgroundImage = loaded;
+                backgroundStream = stream;
                 ImageAnimator.Animate(loaded, OnFrame);
+                loaded = null;
+                stream = null;
             }
             else
             {
@@ -196,7 +205,9 @@ internal static class Theme
                 }
 
                 loaded.Dispose();
+                loaded = null;
                 stream.Dispose();
+                stream = null;
 
                 animated = false;
                 BackgroundImage = prepared;
@@ -208,6 +219,11 @@ internal static class Theme
         {
             ClearBackground();
             return false;
+        }
+        finally
+        {
+            loaded?.Dispose();
+            stream?.Dispose();
         }
     }
 
@@ -228,6 +244,8 @@ internal static class Theme
             old.Dispose();
         }
 
+        backgroundStream?.Dispose();
+        backgroundStream = null;
         animated = false;
     }
 
