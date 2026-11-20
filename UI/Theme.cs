@@ -39,7 +39,15 @@ internal static class Theme
         ["Gruvbox"]     = new("#282828", "#1d2021", "#bdae93", "#fabd2f", "#fbf1c7", "#b8bb26", "#fb4934"),
         ["Catppuccin"]  = new("#1e1e2e", "#181825", "#a6adc8", "#cba6f7", "#cdd6f4", "#a6e3a1", "#f38ba8"),
         ["Black"]       = new("#000000", "#0b0b0b", "#8c8c8c", "#ffffff", "#ffffff", "#7ee787", "#ff7b72"),
-        ["Light"]       = new("#eff1f5", "#e2e5ec", "#5c5f77", "#1e66f5", "#11111b", "#2f9e44", "#d20f39")
+        ["Light"]       = new("#eff1f5", "#e2e5ec", "#5c5f77", "#1e66f5", "#11111b", "#2f9e44", "#d20f39"),
+        ["Rose Pine"]   = new("#191724", "#12101c", "#908caa", "#c4a7e7", "#e0def4", "#9ccfd8", "#eb6f92"),
+        ["One Dark"]    = new("#282c34", "#21252b", "#abb2bf", "#61afef", "#ffffff", "#98c379", "#e06c75"),
+        ["Midnight"]    = new("#0d1117", "#090c10", "#8b949e", "#58a6ff", "#f0f6fc", "#3fb950", "#f85149"),
+        ["Ocean"]       = new("#0f1c2e", "#0a1422", "#8fa6c4", "#4fc3f7", "#eaf4ff", "#69f0ae", "#ff8a80"),
+        ["Everforest"]  = new("#2d353b", "#232a2e", "#9da9a0", "#a7c080", "#d3c6aa", "#a7c080", "#e67e80"),
+        ["Sunset"]      = new("#2b1b2e", "#211522", "#c9a7bd", "#ff9e64", "#fff1e6", "#9ece6a", "#f7768e"),
+        ["Solarized"]   = new("#002b36", "#00212b", "#93a1a1", "#b58900", "#fdf6e3", "#859900", "#dc322f"),
+        ["Paper"]       = new("#fdf6e3", "#eee8d5", "#657b83", "#268bd2", "#073642", "#859900", "#dc322f")
     };
 
     public const string CustomName = "Custom";
@@ -67,6 +75,9 @@ internal static class Theme
     public static int CornerRadius { get; private set; }
     public static int SearchBarOpacityPercent { get; private set; } = 85;
     public static float MenuFontScale { get; private set; } = 1f;
+
+    /// <summary>Multiplier on animation time: 1 = normal, large = instant.</summary>
+    public static double AnimationScale { get; private set; } = 1.0;
     public static string MenuFontFamily { get; private set; } = "Consolas";
     public static string AssetFolder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -174,6 +185,9 @@ internal static class Theme
         CornerRadius = Math.Clamp(s.CornerRadius, 0, 24);
         SearchBarOpacityPercent = Math.Clamp(s.TopBarOpacityPercent, 0, 100);
         MenuFontScale = Math.Clamp(s.MenuFontScalePercent, 80, 140) / 100f;
+        AnimationScale = s.AnimationSpeedPercent <= 0
+            ? 60.0
+            : Math.Clamp(s.AnimationSpeedPercent, 20, 400) / 100.0;
         ConfigureFont(s);
     }
 
@@ -182,12 +196,53 @@ internal static class Theme
             ? new Font(privateFontFamily, size, style)
             : new Font(MenuFontFamily, size, style);
 
+    // Fonts the rows share. Creating three fonts per row made opening a page
+    // visibly slow; these are made once and live as long as the program.
+    private static readonly Dictionary<(string Family, string Path, int Size, FontStyle Style), Font> sharedFonts = new();
+
+    /// <summary>Raised by one whenever the menu font changes; rows compare it.</summary>
+    public static int FontVersion { get; private set; }
+
+    /// <summary>A menu font shared by everything that asks for it. Never dispose it.</summary>
+    public static Font SharedMenuFont(float size, FontStyle style = FontStyle.Regular)
+    {
+        var key = (MenuFontFamily, configuredFontPath, (int)Math.Round(size * 100), style);
+
+        if (!sharedFonts.TryGetValue(key, out Font? font))
+        {
+            font = CreateMenuFont(size, style);
+            sharedFonts[key] = font;
+        }
+
+        return font;
+    }
+
+    /// <summary>The icon-glyph font, shared. Never dispose it.</summary>
+    public static Font SharedIconFont(float size)
+    {
+        var key = ("Segoe MDL2 Assets", "", (int)Math.Round(size * 100), FontStyle.Regular);
+
+        if (!sharedFonts.TryGetValue(key, out Font? font))
+        {
+            font = new Font("Segoe MDL2 Assets", size);
+            sharedFonts[key] = font;
+        }
+
+        return font;
+    }
+
     private static void ConfigureFont(AppSettings settings)
     {
         string path = settings.MenuFontPath ?? "";
+        string familyBefore = MenuFontFamily;
 
         if (!string.Equals(path, configuredFontPath, StringComparison.OrdinalIgnoreCase))
         {
+            // Fonts made from the old file must not be used again. (They are
+            // dropped, not disposed: a row may still be painting with one.)
+            sharedFonts.Clear();
+            FontVersion++;
+
             privateFontCollection?.Dispose();
             privateFontCollection = null;
             privateFontFamily = null;
@@ -222,11 +277,15 @@ internal static class Theme
             (string.IsNullOrWhiteSpace(settings.MenuFontFamily)
                 ? "Consolas"
                 : settings.MenuFontFamily);
+
+        if (!string.Equals(familyBefore, MenuFontFamily, StringComparison.Ordinal))
+            FontVersion++;
     }
 
     public static void ConfigureAssets(AppSettings settings)
     {
         AssetLoadError = null;
+        ClearAssetBakes();
         Dictionary<string, SkinImageAsset> configured =
             settings.ThemeImages ?? new Dictionary<string, SkinImageAsset>();
 
@@ -330,8 +389,57 @@ internal static class Theme
             return false;
         }
 
-        DrawFittedImage(graphics, image, area, asset, opacity);
+        if (area.Width <= 0 || area.Height <= 0)
+            return true;
+
+        // Laid out once per size, then copied: rows repaint on every frame.
+        var bakeKey = (key, area.Size);
+
+        if (!assetBakes.TryGetValue(bakeKey, out Bitmap? bake))
+        {
+            if (assetBakes.Count >= 16)
+                ClearAssetBakes();
+
+            bake = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppPArgb);
+
+            using (Graphics bakeGraphics = Graphics.FromImage(bake))
+            {
+                bakeGraphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                DrawFittedImage(
+                    bakeGraphics, image,
+                    new Rectangle(Point.Empty, area.Size), asset, 1f);
+            }
+
+            assetBakes[bakeKey] = bake;
+        }
+
+        if (opacity >= 0.999f)
+        {
+            graphics.DrawImageUnscaled(bake, area.Location);
+            return true;
+        }
+
+        using ImageAttributes fade = new();
+        fade.SetColorMatrix(new ColorMatrix
+        {
+            Matrix33 = Math.Clamp(opacity, 0f, 1f)
+        });
+
+        graphics.DrawImage(
+            bake, area, 0, 0, bake.Width, bake.Height,
+            GraphicsUnit.Pixel, fade);
+
         return true;
+    }
+
+    private static readonly Dictionary<(string Key, Size Size), Bitmap> assetBakes = new();
+
+    private static void ClearAssetBakes()
+    {
+        foreach (Bitmap bake in assetBakes.Values)
+            bake.Dispose();
+
+        assetBakes.Clear();
     }
 
     public static void DrawFittedImage(
@@ -716,14 +824,20 @@ internal static class Theme
         return bitmap;
     }
 
-    private static void OnFrame(object? sender, EventArgs e) =>
+    private static void OnFrame(object? sender, EventArgs e)
+    {
+        Interlocked.Increment(ref backgroundFrame);
         FrameChanged?.Invoke();
+    }
 
     public static void ClearBackground()
     {
         Image? old = BackgroundImage;
 
         BackgroundImage = null;
+        backgroundVersion++;
+        backgroundBake?.Dispose();
+        backgroundBake = null;
 
         if (old != null)
         {
@@ -738,14 +852,80 @@ internal static class Theme
         animated = false;
     }
 
-    /// <summary>Paints the background image into <paramref name="area"/>.</summary>
-    public static void PaintBackground(Graphics g, Rectangle area)
+    // The picture is laid out (scaled, cropped, faded) once into this bitmap;
+    // every repaint after that is a plain copy. Rows repaint on every
+    // animation frame, so re-scaling the picture each time was the main
+    // cost of a menu with a background.
+    private static Bitmap? backgroundBake;
+    private static (int Image, int Frame, Size Size, BackgroundFit Fit, int Align, float Strength) backgroundBakeKey;
+    private static int backgroundVersion;
+    private static int backgroundFrame;
+
+    /// <summary>
+    /// Paints the background image into <paramref name="area"/>. The picture is
+    /// laid out for <paramref name="layout"/> (the menu's full size) so it does
+    /// not rescale while the window grows and shrinks; only the part inside
+    /// <paramref name="area"/> shows.
+    /// </summary>
+    public static void PaintBackground(Graphics g, Rectangle area, Size layout = default)
     {
         Image? image = BackgroundImage;
 
         if (image == null || area.Width <= 0 || area.Height <= 0)
             return;
 
+        try
+        {
+            Size size = layout.IsEmpty ? area.Size : layout;
+            size = new Size(
+                Math.Max(size.Width, area.Right),
+                Math.Max(size.Height, area.Bottom));
+
+            var key = (backgroundVersion, animated ? backgroundFrame : 0,
+                size, Fit, Align, Strength);
+
+            if (backgroundBake == null || !key.Equals(backgroundBakeKey))
+            {
+                if (backgroundBake == null || backgroundBake.Size != size)
+                {
+                    backgroundBake?.Dispose();
+                    backgroundBake = new Bitmap(
+                        size.Width, size.Height, PixelFormat.Format32bppPArgb);
+                }
+
+                using (Graphics bake = Graphics.FromImage(backgroundBake))
+                {
+                    bake.Clear(Color.Transparent);
+                    RenderBackground(bake, image, new Rectangle(Point.Empty, size));
+                }
+
+                backgroundBakeKey = key;
+            }
+
+            // Only the part that is actually being repainted.
+            Rectangle clip = Rectangle.Intersect(
+                area, Rectangle.Ceiling(g.ClipBounds));
+
+            if (clip.Width <= 0 || clip.Height <= 0)
+                return;
+
+            GraphicsState state = g.Save();
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(
+                backgroundBake, clip,
+                clip.X - area.X, clip.Y - area.Y, clip.Width, clip.Height,
+                GraphicsUnit.Pixel);
+            g.Restore(state);
+        }
+        catch
+        {
+            // A broken frame must never break painting.
+        }
+    }
+
+    private static void RenderBackground(Graphics g, Image image, Rectangle area)
+    {
         try
         {
             if (animated)

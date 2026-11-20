@@ -35,6 +35,7 @@ public sealed partial class MainForm
     private static readonly int[] RowHeightChoices = { 28, 30, 32, 36, 40, 44, 48 };
     private static readonly int[] BorderThicknessChoices = { 1, 2, 3, 4, 5, 6 };
     private static readonly int[] CornerChoices = { 0, 6, 12, 18, 24 };
+    private static readonly int[] AnimationSpeedChoices = { 0, 60, 100, 160, 240 };
 
     private int framePending;
 
@@ -163,158 +164,403 @@ public sealed partial class MainForm
     }
 
     // --------------------------------------------------
-    // STYLE PAGE
+    // STYLE PAGES
+    // Style is the front door; Colours, Layout, Text and Background are the
+    // rooms behind it. On every value row a click gives the next value and a
+    // right-click the previous one, and the menu itself is the preview.
     // --------------------------------------------------
+
+    private const string CycleHint = "Click = next value, right-click = previous.";
+
+    private MenuEntry StyleCycle<T>(
+        string label, T[] values, Func<T> get, Action<T> set,
+        Func<T, string> format, string tip, Image? icon = null)
+    {
+        void Step(int direction)
+        {
+            int i = Array.IndexOf(values, get());
+
+            // A value that is not in the list yet (an old settings file):
+            // the first click goes to the nearest end.
+            if (i < 0)
+                i = direction > 0 ? -1 : 0;
+
+            i = (i + direction + values.Length) % values.Length;
+
+            set(values[i]);
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+
+        string text = $"{label}: {format(get())}";
+
+        return new MenuEntry(0, "", text,
+            run: () => Step(1), runAlt: () => Step(-1), iconBitmap: icon,
+            expandText: text + NL + tip + NL + CycleHint);
+    }
+
+    // The same for plain numbers: a stored value that is not one of the
+    // choices counts as the nearest choice.
+    private MenuEntry StyleNumber(
+        string label, int[] choices, Func<int> get, Action<int> set,
+        string suffix, string tip)
+    {
+        int Snap(int value) =>
+            choices.OrderBy(c => Math.Abs(c - value)).First();
+
+        return StyleCycle(label, choices, () => Snap(get()), set,
+            v => v + suffix, tip);
+    }
+
+    private static readonly Dictionary<int, Bitmap> swatches = new();
+
+    // A small colour chip shown as the row's icon.
+    private static Bitmap Swatch(Color color)
+    {
+        int key = color.ToArgb();
+
+        if (swatches.TryGetValue(key, out Bitmap? cached))
+            return cached;
+
+        if (swatches.Count > 48)
+            swatches.Clear();
+
+        Bitmap chip = new(22, 22, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+
+        using (Graphics g = Graphics.FromImage(chip))
+        using (System.Drawing.Drawing2D.GraphicsPath path =
+            DoublePanel.RoundedPath(new Rectangle(1, 3, 19, 15), 4))
+        using (SolidBrush fill = new(color))
+        using (Pen edge = new(Color.FromArgb(150, 140, 140, 140), 1f))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.FillPath(fill, path);
+            g.DrawPath(edge, path);
+        }
+
+        swatches[key] = chip;
+        return chip;
+    }
+
+    private MenuEntry ColourRow(string label, Color current, Action pick) =>
+        new(0, "", label, run: pick, iconBitmap: Swatch(current),
+            expandText: label + NL + "Opens the colour picker. The chip shows the colour now.");
+
+    private MenuEntry ThemeRow()
+    {
+        string[] names = Theme.PresetNames
+            .Where(n => n != Theme.CustomName ||
+                        !string.IsNullOrEmpty(settings.CustomBackground))
+            .ToArray();
+
+        void Step(int direction)
+        {
+            int i = Math.Max(0, Array.IndexOf(names, Theme.Name));
+
+            settings.ThemeName = names[(i + direction + names.Length) % names.Length];
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+        }
+
+        int at = Array.IndexOf(names, Theme.Name) + 1;
+        string text = $"Theme: {Theme.Name}  ({Math.Max(1, at)}/{names.Length})";
+
+        return new MenuEntry(0, "", text,
+            run: () => Step(1), runAlt: () => Step(-1),
+            iconBitmap: Swatch(Theme.Accent),
+            expandText: text + NL +
+                "A ready-made set of colours. Picking any colour yourself makes a Custom theme." +
+                NL + CycleHint);
+    }
 
     private List<MenuEntry> BuildStylePage()
     {
         List<MenuEntry> list = new()
         {
-            Act("", $"Theme: {Theme.Name}", () =>
+            ThemeRow(),
+            new MenuEntry(0, "", "Colours...", targetPage: "StyleColours"),
+            new MenuEntry(0, "", "Layout and animation...", targetPage: "StyleLayout"),
+            new MenuEntry(0, "", "Text and font...", targetPage: "StyleText"),
+            new MenuEntry(0, "", "Background image...", targetPage: "StyleBackground"),
+            new MenuEntry(0, "", "Skin images and icons...", targetPage: "SkinAssets"),
+            new MenuEntry(0, "", "Notifications...", targetPage: "Notifications"),
+            Act("", "Save this look to a file...", ExportStyle),
+            Act("", "Load a look from a file...", ImportStyle),
+            Act("", "Reset appearance", ResetAppearance),
+            BackEntry()
+        };
+
+        return Renumber(list);
+    }
+
+    private List<MenuEntry> BuildColoursPage()
+    {
+        List<MenuEntry> list = new()
+        {
+            ThemeRow(),
+            ColourRow("Background colour...", Theme.Background, () => PickThemeColor("background")),
+            ColourRow("Accent colour...", Theme.Accent, () => PickThemeColor("accent")),
+            ColourRow("Text colour...", Theme.Text, () => PickThemeColor("text")),
+            ColourRow("Active row colour...", Theme.ActiveRow, () => PickCustomizeColor("row")),
+            ColourRow("Border colour...", Theme.BorderColor, () => PickCustomizeColor("border")),
+            ColourRow("Search bar colour...", Theme.SearchBar, () => PickCustomizeColor("searchbar")),
+
+            StyleCycle("Search bar own background", new[] { false, true },
+                () => settings.TopBarBackgroundEnabled,
+                v => settings.TopBarBackgroundEnabled = v,
+                v => v ? "on" : "off",
+                "Gives the search bar its own colour (and see-through level) instead of the plain one."),
+
+            StyleNumber("Search bar visible", SearchBarOpacityChoices,
+                () => Theme.SearchBarOpacityPercent,
+                v => settings.TopBarOpacityPercent = v, "%",
+                "How solid the search bar's own background is."),
+
+            StyleNumber("Brightness", BrightnessChoices,
+                () => settings.ThemeBrightnessPercent,
+                v => settings.ThemeBrightnessPercent = v, "%",
+                "Makes every colour of the theme lighter or darker."),
+
+            Act("", "Reset colours", () =>
             {
-                string[] names = Theme.PresetNames;
-                int next = (Array.IndexOf(names, Theme.Name) + 1) % names.Length;
-
-                // "Custom" only makes sense once a colour was picked.
-                if (names[next] == Theme.CustomName &&
-                    string.IsNullOrEmpty(settings.CustomBackground))
-                {
-                    next = (next + 1) % names.Length;
-                }
-
-                settings.ThemeName = names[next];
+                settings.ThemeName = "Tokyo Night";
+                settings.CustomBackground = "";
+                settings.CustomAccent = "";
+                settings.CustomText = "";
+                settings.CustomTopBar = "";
+                settings.CustomRowHighlight = "";
+                settings.CustomBorder = "";
+                settings.TopBarBackgroundEnabled = false;
+                settings.TopBarOpacityPercent = 85;
+                settings.ThemeBrightnessPercent = 100;
                 SaveSettings();
                 ApplyAppearance(reloadBackground: false);
             }),
 
-            Act("", "Background colour...", () => PickThemeColor("background")),
-            Act("", "Accent colour...", () => PickThemeColor("accent")),
-            Act("", "Text colour...", () => PickThemeColor("text")),
+            BackEntry()
+        };
 
-            Act("", "More customization...", () => ShowPage("Customize")),
+        return Renumber(list);
+    }
 
-            Act("", "Background image / GIF / video...", ChooseBackground)
+    private List<MenuEntry> BuildLayoutPage()
+    {
+        List<MenuEntry> list = new()
+        {
+            StyleNumber("Menu width", MenuWidthChoices, () => Theme.MenuWidth,
+                v => settings.MenuWidth = v, "px", "How wide the launcher is."),
+
+            StyleNumber("Row height", RowHeightChoices, () => Theme.RowHeight,
+                v => settings.MenuRowHeight = v, "px", "How tall each row is."),
+
+            StyleNumber("Corner radius", CornerChoices, () => Theme.CornerRadius,
+                v => settings.CornerRadius = v, "px", "0 = square corners."),
+
+            StyleNumber("Border thickness", BorderThicknessChoices, () => Theme.BorderThickness,
+                v => settings.BorderThickness = v, "px", "The line around the menu."),
+
+            StyleNumber("Menu visible", OpacityChoices, OpacityValue,
+                v => settings.LauncherOpacity = v, "%",
+                "Lower = the whole launcher is more see-through."),
+
+            StyleCycle("Animation speed", AnimationSpeedChoices,
+                AnimationSpeedValue,
+                v => settings.AnimationSpeedPercent = v,
+                v => v == 0 ? "off" : v < 100 ? "slow" : v == 100 ? "normal" : v < 200 ? "fast" : "very fast",
+                "How quickly the menu slides, fades and highlights. Off shows every change at once."),
+
+            BackEntry()
+        };
+
+        return Renumber(list);
+    }
+
+    private List<MenuEntry> BuildFontPage()
+    {
+        List<MenuEntry> list = new()
+        {
+            StyleNumber("Font size", FontScaleChoices, () => settings.MenuFontScalePercent,
+                v => settings.MenuFontScalePercent = v, "%", "The size of all text in the launcher."),
+
+            Act("", $"Font: {Theme.MenuFontFamily}", ChooseInstalledFont),
+            Act("", "Load a font file...", ChooseFontFile),
+
+            Act("", "Reset font", () =>
+            {
+                settings.MenuFontScalePercent = 100;
+                settings.MenuFontFamily = "";
+                settings.MenuFontPath = "";
+                SaveSettings();
+                ApplyAppearance(reloadBackground: false);
+            }),
+
+            BackEntry()
+        };
+
+        return Renumber(list);
+    }
+
+    private List<MenuEntry> BuildBackgroundPage()
+    {
+        List<MenuEntry> list = new()
+        {
+            Act("", "Choose an image, GIF or video...", ChooseBackground)
         };
 
         if (Theme.HasBackground)
         {
-            list.Add(Act("", "Remove background", RemoveBackground));
+            list.Add(Act("", "Remove the background", RemoveBackground));
 
-            list.Add(Act("", $"Background fit: {FitNames[FitIndex()]}", () =>
-            {
-                settings.BackgroundFit = (FitIndex() + 1) % FitNames.Length;
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }));
+            list.Add(StyleCycle("Fit", Enumerable.Range(0, FitNames.Length).ToArray(),
+                FitIndex, v => settings.BackgroundFit = v, v => FitNames[v],
+                "How the picture is scaled to the menu."));
 
-            list.Add(Act("", $"Background position: {AlignNames[AlignIndex()]}", () =>
-            {
-                settings.BackgroundAlign = (AlignIndex() + 1) % AlignNames.Length;
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }));
+            list.Add(StyleCycle("Position", Enumerable.Range(0, AlignNames.Length).ToArray(),
+                AlignIndex, v => settings.BackgroundAlign = v, v => AlignNames[v],
+                "Which part of the picture stays in view."));
 
-            list.Add(Act("", $"Background strength: {StrengthValue()}%", () =>
-            {
-                int next = (Array.IndexOf(StrengthChoices, StrengthValue()) + 1)
-                    % StrengthChoices.Length;
-
-                settings.BackgroundStrength = StrengthChoices[next];
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }));
+            list.Add(StyleNumber("Strength", StrengthChoices, StrengthValue,
+                v => settings.BackgroundStrength = v, "%",
+                "How strongly the picture shows through."));
         }
 
-        list.Add(new MenuEntry(0, "\uE7E7", "Notifications...", targetPage: "Notifications"));
-
-        list.Add(Act("", "Reset appearance", ResetAppearance));
         list.Add(BackEntry());
 
         return Renumber(list);
     }
 
-    private List<MenuEntry> BuildCustomizePage()
+    // ---- save / load a look (to move it between computers) ----
+
+    private sealed class StyleFile
     {
-        List<MenuEntry> list = new()
+        public int Version { get; set; } = 1;
+        public string ThemeName { get; set; } = "Tokyo Night";
+        public string CustomBackground { get; set; } = "";
+        public string CustomAccent { get; set; } = "";
+        public string CustomText { get; set; } = "";
+        public string CustomTopBar { get; set; } = "";
+        public string CustomRowHighlight { get; set; } = "";
+        public string CustomBorder { get; set; } = "";
+        public bool TopBarBackgroundEnabled { get; set; }
+        public int TopBarOpacityPercent { get; set; } = 85;
+        public int ThemeBrightnessPercent { get; set; } = 100;
+        public int MenuFontScalePercent { get; set; } = 100;
+        public string MenuFontFamily { get; set; } = "";
+        public int MenuWidth { get; set; } = 380;
+        public int MenuRowHeight { get; set; } = 32;
+        public int BorderThickness { get; set; } = 2;
+        public int CornerRadius { get; set; }
+        public int LauncherOpacity { get; set; } = 100;
+        public int AnimationSpeedPercent { get; set; } = 100;
+        public int BackgroundFit { get; set; }
+        public int BackgroundAlign { get; set; } = 4;
+        public int BackgroundStrength { get; set; } = 40;
+    }
+
+    private void ExportStyle()
+    {
+        using SaveFileDialog dialog = new()
         {
-            Act("", $"Search bar custom background: {(settings.TopBarBackgroundEnabled ? "on" : "off")}", () =>
-            {
-                settings.TopBarBackgroundEnabled = !settings.TopBarBackgroundEnabled;
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", "Search bar color...", () => PickCustomizeColor("searchbar")),
-            Act("", $"Search bar opacity: {Theme.SearchBarOpacityPercent}%", () =>
-            {
-                settings.TopBarOpacityPercent = NextChoice(
-                    Theme.SearchBarOpacityPercent,
-                    SearchBarOpacityChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Theme brightness: {settings.ThemeBrightnessPercent}%", () =>
-            {
-                settings.ThemeBrightnessPercent = NextChoice(
-                    settings.ThemeBrightnessPercent,
-                    BrightnessChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", "Active row color...", () => PickCustomizeColor("row")),
-            Act("", "Border color...", () => PickCustomizeColor("border")),
-            Act("", $"Border thickness: {Theme.BorderThickness}px", () =>
-            {
-                settings.BorderThickness = NextChoice(
-                    Theme.BorderThickness,
-                    BorderThicknessChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Font size: {settings.MenuFontScalePercent}%", () =>
-            {
-                settings.MenuFontScalePercent = NextChoice(
-                    settings.MenuFontScalePercent,
-                    FontScaleChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Font: {Theme.MenuFontFamily}", ChooseInstalledFont),
-            Act("", "Load font file...", ChooseFontFile),
-            Act("", "Skin images and icons...", () => ShowPage("SkinAssets")),
-            Act("", $"Menu width: {Theme.MenuWidth}px", () =>
-            {
-                settings.MenuWidth = NextChoice(Theme.MenuWidth, MenuWidthChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Row height: {Theme.RowHeight}px", () =>
-            {
-                settings.MenuRowHeight = NextChoice(
-                    Theme.RowHeight,
-                    RowHeightChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Menu opacity: {OpacityValue()}%", () =>
-            {
-                settings.LauncherOpacity = NextChoice(
-                    OpacityValue(),
-                    OpacityChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            Act("", $"Corner radius: {Theme.CornerRadius}px", () =>
-            {
-                settings.CornerRadius = NextChoice(
-                    Theme.CornerRadius,
-                    CornerChoices);
-                SaveSettings();
-                ApplyAppearance(reloadBackground: false);
-            }),
-            BackEntry()
+            Title = "Save this look",
+            Filter = "UtilMaster3000 look|*.umlook.json|All files|*.*",
+            FileName = "my-look.umlook.json"
         };
 
-        return Renumber(list);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        StyleFile file = new()
+        {
+            ThemeName = settings.ThemeName,
+            CustomBackground = settings.CustomBackground,
+            CustomAccent = settings.CustomAccent,
+            CustomText = settings.CustomText,
+            CustomTopBar = settings.CustomTopBar,
+            CustomRowHighlight = settings.CustomRowHighlight,
+            CustomBorder = settings.CustomBorder,
+            TopBarBackgroundEnabled = settings.TopBarBackgroundEnabled,
+            TopBarOpacityPercent = settings.TopBarOpacityPercent,
+            ThemeBrightnessPercent = settings.ThemeBrightnessPercent,
+            MenuFontScalePercent = settings.MenuFontScalePercent,
+            // A font loaded from a file does not exist on the other computer.
+            MenuFontFamily = string.IsNullOrEmpty(settings.MenuFontPath) ? settings.MenuFontFamily : "",
+            MenuWidth = settings.MenuWidth,
+            MenuRowHeight = settings.MenuRowHeight,
+            BorderThickness = settings.BorderThickness,
+            CornerRadius = settings.CornerRadius,
+            LauncherOpacity = settings.LauncherOpacity,
+            AnimationSpeedPercent = settings.AnimationSpeedPercent,
+            BackgroundFit = settings.BackgroundFit,
+            BackgroundAlign = settings.BackgroundAlign,
+            BackgroundStrength = settings.BackgroundStrength
+        };
+
+        try
+        {
+            File.WriteAllText(dialog.FileName,
+                System.Text.Json.JsonSerializer.Serialize(file,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+            Toast("Look saved (pictures and fonts stay on this PC)", OnColor);
+        }
+        catch (Exception ex)
+        {
+            Say("Save this look", "Could not save the file:\n\n" + ex.Message);
+        }
+    }
+
+    private void ImportStyle()
+    {
+        using OpenFileDialog dialog = new()
+        {
+            Title = "Load a look",
+            Filter = "UtilMaster3000 look|*.umlook.json;*.json|All files|*.*"
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            StyleFile? file = System.Text.Json.JsonSerializer.Deserialize<StyleFile>(
+                File.ReadAllText(dialog.FileName));
+
+            if (file == null)
+                throw new InvalidDataException("The file is empty.");
+
+            settings.ThemeName = Theme.PresetNames.Contains(file.ThemeName)
+                ? file.ThemeName
+                : "Tokyo Night";
+            settings.CustomBackground = file.CustomBackground ?? "";
+            settings.CustomAccent = file.CustomAccent ?? "";
+            settings.CustomText = file.CustomText ?? "";
+            settings.CustomTopBar = file.CustomTopBar ?? "";
+            settings.CustomRowHighlight = file.CustomRowHighlight ?? "";
+            settings.CustomBorder = file.CustomBorder ?? "";
+            settings.TopBarBackgroundEnabled = file.TopBarBackgroundEnabled;
+            settings.TopBarOpacityPercent = Math.Clamp(file.TopBarOpacityPercent, 0, 100);
+            settings.ThemeBrightnessPercent = Math.Clamp(file.ThemeBrightnessPercent, 60, 140);
+            settings.MenuFontScalePercent = Math.Clamp(file.MenuFontScalePercent, 80, 140);
+            settings.MenuFontFamily = file.MenuFontFamily ?? "";
+            settings.MenuFontPath = "";
+            settings.MenuWidth = Math.Clamp(file.MenuWidth, 320, 520);
+            settings.MenuRowHeight = Math.Clamp(file.MenuRowHeight, 28, 48);
+            settings.BorderThickness = Math.Clamp(file.BorderThickness, 1, 6);
+            settings.CornerRadius = Math.Clamp(file.CornerRadius, 0, 24);
+            settings.LauncherOpacity = Math.Clamp(file.LauncherOpacity, 30, 100);
+            settings.AnimationSpeedPercent = Math.Clamp(file.AnimationSpeedPercent, 0, 300);
+            settings.BackgroundFit = Math.Clamp(file.BackgroundFit, 0, FitNames.Length - 1);
+            settings.BackgroundAlign = Math.Clamp(file.BackgroundAlign, 0, AlignNames.Length - 1);
+            settings.BackgroundStrength = Math.Clamp(file.BackgroundStrength, 5, 100);
+
+            SaveSettings();
+            ApplyAppearance(reloadBackground: false);
+            Toast("Look loaded", OnColor);
+        }
+        catch (Exception ex)
+        {
+            Say("Load a look", "That file is not a saved look:\n\n" + ex.Message);
+        }
     }
 
     private List<MenuEntry> BuildSkinAssetsPage()
@@ -360,6 +606,9 @@ public sealed partial class MainForm
         StrengthChoices.Contains(settings.BackgroundStrength)
             ? settings.BackgroundStrength
             : 40;
+
+    private int AnimationSpeedValue() =>
+        AnimationSpeedChoices.OrderBy(c => Math.Abs(c - settings.AnimationSpeedPercent)).First();
 
     private int OpacityValue() =>
         OpacityChoices.Contains(settings.LauncherOpacity)
@@ -1063,6 +1312,7 @@ public sealed partial class MainForm
         settings.BackgroundAlign = 4;
         settings.BackgroundStrength = 40;
         settings.LauncherOpacity = 100;
+        settings.AnimationSpeedPercent = 100;
         SaveSettings();
 
         ApplyAppearance(reloadBackground: false);

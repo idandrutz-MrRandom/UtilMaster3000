@@ -217,7 +217,10 @@ public sealed partial class MainForm
             }),
 
             ["Style"] = BuildStylePage(),
-            ["Customize"] = BuildCustomizePage(),
+            ["StyleColours"] = BuildColoursPage(),
+            ["StyleLayout"] = BuildLayoutPage(),
+            ["StyleText"] = BuildFontPage(),
+            ["StyleBackground"] = BuildBackgroundPage(),
             ["SkinAssets"] = BuildSkinAssetsPage(),
 
             ["Setup"] = Renumber(new[]

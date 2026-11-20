@@ -310,6 +310,26 @@ public sealed partial class MainForm : Form
         searchBox.Focus();
     }
 
+    /// <summary>The program was started a second time: show this copy's launcher.</summary>
+    public void ShowFromAnotherStart()
+    {
+        if (IsDisposed || !IsHandleCreated)
+            return;
+
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                ShowPage("home");
+                OpenLauncher();
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            // Closing.
+        }
+    }
+
     private void ToggleLauncher()
     {
         // While recording, the launcher shortcut stops the recording.
@@ -447,8 +467,8 @@ public sealed partial class MainForm : Form
         currentPage == "TextTool" ? "Text" :
         currentPage == "Grab" ? "Tools" :
         currentPage == "Notifications" ? "Style" :
-        currentPage == "Customize" ? "Style" :
-        currentPage == "SkinAssets" ? "Customize" :
+        currentPage.StartsWith("Style", StringComparison.Ordinal) && currentPage != "Style" ? "Style" :
+        currentPage == "SkinAssets" ? "Style" :
         currentPage == "MacroEntry" ? "Macros" :
         currentPage == "MacroStep" ? "MacroEntry" : "home";
 
@@ -494,7 +514,10 @@ public sealed partial class MainForm : Form
         menuBox.Paint += (_, e) =>
         {
             // Background image (if any) goes under the rows and border.
-            Theme.PaintBackground(e.Graphics, menuBox.ClientRectangle);
+            Theme.PaintBackground(
+                e.Graphics,
+                menuBox.ClientRectangle,
+                new Size(menuBox.ClientSize.Width, 100 + MaxRows * RowHeight));
             Theme.DrawAsset(e.Graphics, "frame", menuBox.ClientRectangle);
 
             using Pen border = new(Theme.BorderColor, Theme.BorderThickness);
@@ -616,6 +639,12 @@ public sealed partial class MainForm : Form
 
         breadcrumb.Text = page == "home"
             ? "home"
+            : page.StartsWith("Style", StringComparison.Ordinal) && page != "Style"
+                ? $"home / Style / {page[5..]}"
+            : page == "SkinAssets"
+                ? "home / Style / Skin images"
+            : page == "Notifications"
+                ? "home / Style / Notifications"
             : page == "VaultEntry"
                 ? $"home / Vault / {Trunc(openEntry?.Title ?? "", 22)}"
                 : page == "TextTool"
@@ -718,8 +747,9 @@ public sealed partial class MainForm : Form
 
     private void RebuildRows(bool animateIn)
     {
-        // Same rows, new content: nothing is destroyed, so nothing flickers.
-        bool reuse = !animateIn && visibleRows.Count > 0;
+        // Same rows, new content: nothing is destroyed, so nothing flickers
+        // (and a new page does not pay for building thirteen controls).
+        bool reuse = visibleRows.Count > 0;
 
         int visible = Math.Clamp(
             displayedEntries.Count - scrollTop, 0, MaxRows);
@@ -772,6 +802,12 @@ public sealed partial class MainForm : Form
                 row = visibleRows[i];
                 row.Rebind(entry.Index, entry.Icon, entry.Label);
                 row.Width = rowWidth;
+
+                if (animateIn)
+                {
+                    row.Recycle(i * 0.03);
+                    created.Add(row);
+                }
             }
             else
             {
@@ -1002,7 +1038,8 @@ public sealed partial class MainForm : Form
     private void UiTick(object? sender, EventArgs e)
     {
         long now = uiClock.ElapsedMilliseconds;
-        double dt = Math.Max(1, now - lastUiTick) / 1000.0;
+        // The animation speed setting: 0 jumps every change to its end.
+        double dt = Math.Max(1, now - lastUiTick) / 1000.0 * Theme.AnimationScale;
         lastUiTick = now;
 
         bool busy = false;

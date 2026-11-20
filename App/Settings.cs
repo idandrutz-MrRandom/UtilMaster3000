@@ -151,6 +151,8 @@ internal sealed class AppSettings
     public int MenuRowHeight { get; set; } = 32;
     public int BorderThickness { get; set; } = 2;
     public int CornerRadius { get; set; }
+    // How fast the menu slides / fades / highlights. 100 = normal, 0 = no animation.
+    public int AnimationSpeedPercent { get; set; } = 100;
     public Dictionary<string, SkinImageAsset> ThemeImages { get; set; } = new();
     public SkinImageAsset SharedButtonIcon { get; set; } = new();
     public Dictionary<string, SkinImageAsset> CustomButtonIcons { get; set; } = new();
@@ -216,7 +218,17 @@ internal sealed class AppSettings
         }
         catch
         {
-            // Corrupt or unreadable file: fall back to defaults.
+            // Corrupt or unreadable file: fall back to defaults, but keep the
+            // file (as settings.json.bad) so the settings are not just lost.
+            try
+            {
+                if (File.Exists(FilePath))
+                    File.Copy(FilePath, FilePath + ".bad", overwrite: true);
+            }
+            catch
+            {
+                // Nothing more can be done.
+            }
         }
 
         return new AppSettings();

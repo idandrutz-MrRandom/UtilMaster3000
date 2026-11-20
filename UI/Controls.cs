@@ -181,6 +181,7 @@ internal sealed class LauncherRow : Control
     private Font labelFont;
     private float fontScale;
     private string fontFamilyName;
+    private int fontVersion;
     private readonly bool useThemeFont;
 
     private bool active;
@@ -300,6 +301,17 @@ internal sealed class LauncherRow : Control
     {
         hover = active ? 1f : 0f;
         Invalidate();
+    }
+
+    /// <summary>
+    /// A row that is reused for a new page: forget what the old content was
+    /// doing (unfolded, highlighted) and slide in like a new row.
+    /// </summary>
+    public void Recycle(double delaySeconds)
+    {
+        reveal = 0f;
+        activeFor = 0f;
+        StartAppear(delaySeconds);
     }
 
     public void StartAppear(double delaySeconds)
@@ -441,12 +453,16 @@ internal sealed class LauncherRow : Control
 
         fontScale = useThemeFont ? Theme.MenuFontScale : 1f;
         fontFamilyName = useThemeFont ? Theme.MenuFontFamily : monoFont;
+        fontVersion = Theme.FontVersion;
+
+        // Menu rows share their fonts (building three per row made opening a
+        // page slow); a row with its own font family keeps its own.
         indexFont = useThemeFont
-            ? Theme.CreateMenuFont(8f * fontScale)
+            ? Theme.SharedMenuFont(8f * fontScale)
             : new Font(monoFont, 8f);
-        iconFont = new Font("Segoe MDL2 Assets", 14f * fontScale);
+        iconFont = Theme.SharedIconFont(14f * fontScale);
         labelFont = useThemeFont
-            ? Theme.CreateMenuFont(9f * fontScale)
+            ? Theme.SharedMenuFont(9f * fontScale)
             : new Font(monoFont, 9f);
 
         SetStyle(
@@ -468,17 +484,16 @@ internal sealed class LauncherRow : Control
     {
         if (useThemeFont &&
             (Math.Abs(fontScale - Theme.MenuFontScale) > 0.001f ||
-             fontFamilyName != Theme.MenuFontFamily))
+             fontFamilyName != Theme.MenuFontFamily ||
+             fontVersion != Theme.FontVersion))
         {
-            indexFont.Dispose();
-            iconFont.Dispose();
-            labelFont.Dispose();
-
+            // Shared fonts: nothing to dispose here.
             fontScale = Theme.MenuFontScale;
             fontFamilyName = Theme.MenuFontFamily;
-            indexFont = Theme.CreateMenuFont(8f * fontScale);
-            iconFont = new Font("Segoe MDL2 Assets", 14f * fontScale);
-            labelFont = Theme.CreateMenuFont(9f * fontScale);
+            fontVersion = Theme.FontVersion;
+            indexFont = Theme.SharedMenuFont(8f * fontScale);
+            iconFont = Theme.SharedIconFont(14f * fontScale);
+            labelFont = Theme.SharedMenuFont(9f * fontScale);
         }
 
         BackColor = Theme.HasBackground ? Color.Transparent : BackgroundColor;
@@ -637,10 +652,10 @@ internal sealed class LauncherRow : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        // Only a row with its own font family owns its fonts.
+        if (disposing && !useThemeFont)
         {
             indexFont.Dispose();
-            iconFont.Dispose();
             labelFont.Dispose();
         }
 
