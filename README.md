@@ -13,6 +13,31 @@ Or open the folder in VS Code and run the **Build UtilMaster3000** task. Only on
 
 Settings live in `%APPDATA%\UtilMaster3000\settings.json` (Setup → About → *Open settings folder*).
 
+## Important to know
+
+**Requirements.** Windows 10/11 and the .NET 8 runtime (the SDK if you build it yourself). UtilTube sign-in uses the WebView2 runtime, which is included with Windows 11 and up-to-date Windows 10.
+
+**Optional helpers.**
+- **ffmpeg** gives MP4 screen recordings of any length. Without it only short GIF recordings (30 s max) are possible.
+- **yt-dlp** powers UtilTube. It is found on your `PATH` or downloaded from the project's official GitHub release into `%APPDATA%\UtilMaster3000\tools`.
+
+**Keyboard hooks and antivirus.** The launcher registers global hotkeys and a global keyboard hook (Print Screen keys, macros, and the typing converter). Some antivirus tools flag this kind of program. The hook for the typing converter is removed completely when **Setup → Typing mode** is **Off**.
+
+**Typing converter.** It rewrites what you type in every application, in the Russian or Weird-text mode. If text suddenly looks wrong, press `Ctrl + Alt + R` or set Typing mode to Off.
+**Vault.** The master password is never stored and cannot be recovered. If you forget it, the vault cannot be opened. Keep a backup of `vault.dat` if the passwords matter.
+
+**Your data stays on your PC.** There is no account or sign-up of its own. Network use is what you ask for: web search, UtilTube, link downloads, and fetching yt-dlp. The Google sign-in for UtilTube happens on Google's own page; only session cookies are kept, encrypted for your Windows user, and **Sign out** deletes them.
+
+**Recording and macros.** Recordings and screenshots hide the launcher's own pop-ups, but the menu itself is captured if you open it while recording (see **Menu opens while recording**). Macros and the autoclicker act on the real mouse and keyboard, so know the stop key before you start (autoclicker `F6`, macros `F9` to record and `F10` to play) and avoid replaying macros over windows that hold unsaved work.
+
+**One copy at a time.** Starting a second copy just shows the first. If a build fails because the file is in use, close the running launcher first (**System → Close app**).
+
+**If something breaks.**
+- Errors are logged to `%APPDATA%\UtilMaster3000\crash.log`.
+- An unreadable `settings.json` is kept as `settings.json.bad` and the app starts with defaults, so nothing is lost.
+- **Setup → Reset settings** and **Style → Reset appearance** restore defaults.
+- Your look can be saved to a `.umlook.json` file from the Style page before you experiment.
+
 ## Opening the menu
 
 | What | Default key |
