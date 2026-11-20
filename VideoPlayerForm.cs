@@ -575,6 +575,14 @@ internal sealed class VideoPlayerForm : Form
     /// <summary>Diagnostics hook (tests): player events in order.</summary>
     public static Action<string>? DebugLog { get; set; }
 
+    private static void Dbg(string message)
+    {
+        if (!message.StartsWith("endTick"))
+            StreamLog.Write("player", message);
+
+        DebugLog?.Invoke(message);
+    }
+
     /// <summary>Tests: always convert streams instead of playing them directly.</summary>
     public static bool ForceBridge { get; set; }
     public static bool NoUpgrade { get; set; }
@@ -857,7 +865,7 @@ internal sealed class VideoPlayerForm : Form
         resolveCts?.Cancel();
         HideEndScreen();
 
-        DebugLog?.Invoke($"Open({i}) {playlist[i].Title}  (was index {index})");
+        Dbg($"Open({i}) {playlist[i].Title}  (was index {index})");
 
         index = i;
         TubeVideo video = Current;
@@ -887,6 +895,11 @@ internal sealed class VideoPlayerForm : Form
         boost = 1.0;
         abA = abB = -1;
         seek.MarkA = seek.MarkB = -1;
+        seek.SetLoaded(-1, -1);
+
+        // Streaming (not a file on disk): saving other videos steps aside while it loads.
+        if (!(video.File != null && File.Exists(video.File)) && !LocalMedia.IsLocalId(video.Id))
+            StreamProxy.NoteStarting();
 
         // Resume where you stopped (only saved videos keep a position).
         TubeVideo? saved = TubeLibrary.Instance.Get(video.Id);
@@ -1070,6 +1083,7 @@ internal sealed class VideoPlayerForm : Form
         bridgeOffset = start;
 
         restartOpened = false;
+        proxy.ResetLoaded();
         StartSource(new Uri(proxy.RegisterBridge(spec with { StartSeconds = start })));
 
         // A video that never opens is retried with fresh addresses, not left loading.
@@ -1093,12 +1107,13 @@ internal sealed class VideoPlayerForm : Form
 
         bool wasPlaying = playing;
 
-        DebugLog?.Invoke($"RestartBridge({seconds:0.0}, try {attempt + 1}) from: " + string.Join(" < ",
+        Dbg($"RestartBridge({seconds:0.0}, try {attempt + 1}) from: " + string.Join(" < ",
             new System.Diagnostics.StackTrace().GetFrames().Skip(1).Take(4).Select(f => f.GetMethod()?.Name)));
 
         restartedAt = Environment.TickCount64;
         bridgeOffset = Math.Max(0, seconds);
         restartOpened = false;
+        proxy.ResetLoaded();
         media.Source = new Uri(proxy.RegisterBridge(bridgeBase with { StartSeconds = bridgeOffset }));
         ApplySpeed();
 
@@ -1151,13 +1166,13 @@ internal sealed class VideoPlayerForm : Form
 
                 if (state == 0)
                 {
-                    DebugLog?.Invoke($"verify #{generation}: superseded or closed after {waited.ElapsedMilliseconds} ms");
+                    Dbg($"verify #{generation}: superseded or closed after {waited.ElapsedMilliseconds} ms");
                     return;
                 }
 
                 if (state == 2)
                 {
-                    DebugLog?.Invoke($"verify #{generation}: picture moving after {waited.ElapsedMilliseconds} ms");
+                    Dbg($"verify #{generation}: picture moving after {waited.ElapsedMilliseconds} ms");
 
                     if (attempt > 0)
                         OnUiThread(() => { Say("Back"); return 0; }, 0);
@@ -1173,12 +1188,12 @@ internal sealed class VideoPlayerForm : Form
 
             if (attempt >= 3)
             {
-                DebugLog?.Invoke("restart: gave up after 4 tries");
+                Dbg("restart: gave up after 4 tries");
                 OnUiThread(() => { Say("Couldn't reconnect. Press F5 to try again, or reopen the video."); return 0; }, 0);
                 return;
             }
 
-            DebugLog?.Invoke($"restart: no picture after {timeoutMs} ms, trying again with fresh addresses");
+            Dbg($"restart: no picture after {timeoutMs} ms, trying again with fresh addresses");
             OnUiThread(() => { Say($"Reconnecting (try {attempt + 2} of 4)..."); return 0; }, 0);
 
             // Fresh stream addresses: the old ones may have gone stale or been refused.
@@ -1191,7 +1206,7 @@ internal sealed class VideoPlayerForm : Form
             }
             catch (Exception ex)
             {
-                DebugLog?.Invoke("restart: new addresses failed: " + ex.Message);
+                Dbg("restart: new addresses failed: " + ex.Message);
             }
 
             OnUiThread(() =>
@@ -1214,7 +1229,7 @@ internal sealed class VideoPlayerForm : Form
         }
         catch (Exception ex)
         {
-            DebugLog?.Invoke("restart check failed: " + ex.Message);
+            Dbg("restart check failed: " + ex.Message);
         }
     }
 
@@ -1283,11 +1298,11 @@ internal sealed class VideoPlayerForm : Form
             proxy ??= new StreamProxy();
             string uri = proxy.PrepareBridge(upgraded);
 
-            DebugLog?.Invoke($"upgrade: preparing {better.Height}p to take over at {switchAt:0.0}s");
+            Dbg($"upgrade: preparing {better.Height}p to take over at {switchAt:0.0}s");
 
             if (!await proxy.WaitReadyAsync(uri, 25000))
             {
-                DebugLog?.Invoke("upgrade: the better stream did not start, staying put");
+                Dbg("upgrade: the better stream did not start, staying put");
                 return;
             }
 
@@ -1314,7 +1329,7 @@ internal sealed class VideoPlayerForm : Form
             bridgeBase = upgraded;
             bridgeOffset = switchAt;
 
-            DebugLog?.Invoke($"upgrade: {current.Height}p -> {better.Height}p at {now:0.0}s (copyVideo={better.CopyVideo})");
+            Dbg($"upgrade: {current.Height}p -> {better.Height}p at {now:0.0}s (copyVideo={better.CopyVideo})");
 
             media.Source = new Uri(uri);
             ApplySpeed();
@@ -1375,7 +1390,7 @@ internal sealed class VideoPlayerForm : Form
 
         int next = index + 1 < playlist.Count ? index + 1 : repeat == RepeatMode.Playlist ? 0 : -1;
 
-        DebugLog?.Invoke($"skipping unavailable \"{video.Title}\" ({index + 1} of {playlist.Count})");
+        Dbg($"skipping unavailable \"{video.Title}\" ({index + 1} of {playlist.Count})");
 
         OnUi(() =>
         {
@@ -1646,7 +1661,7 @@ internal sealed class VideoPlayerForm : Form
         }
         catch (Exception ex)
         {
-            DebugLog?.Invoke("subtitles failed: " + ex.Message);
+            Dbg("subtitles failed: " + ex.Message);
             Say("Couldn't look up subtitles");
         }
         finally
@@ -1730,7 +1745,7 @@ internal sealed class VideoPlayerForm : Form
         }
         catch (Exception ex)
         {
-            DebugLog?.Invoke("subtitle download failed: " + ex.Message);
+            Dbg("subtitle download failed: " + ex.Message);
             Say("Couldn't load those subtitles");
         }
     }
@@ -1923,7 +1938,7 @@ internal sealed class VideoPlayerForm : Form
 
     private void OnEnded()
     {
-        DebugLog?.Invoke($"MediaEnded on {Current.Title} position={Pos:0.0}/{duration:0.0} (last seen {lastPlayPosition:0.0})");
+        Dbg($"MediaEnded on {Current.Title} position={Pos:0.0}/{duration:0.0} (last seen {lastPlayPosition:0.0})");
 
         // A streamed video that "ends" far from its real end means the data
         // stopped coming: carry on from where it was instead of stopping.
@@ -1931,7 +1946,7 @@ internal sealed class VideoPlayerForm : Form
             lastPlayPosition < duration - 8 && prematureEnds < 6)
         {
             prematureEnds++;
-            DebugLog?.Invoke($"  ended early at {lastPlayPosition:0.0}s of {duration:0.0}s: reconnecting (try {prematureEnds})");
+            Dbg($"  ended early at {lastPlayPosition:0.0}s of {duration:0.0}s: reconnecting (try {prematureEnds})");
             Say("Reconnecting...");
 
             playing = true;
@@ -1941,7 +1956,7 @@ internal sealed class VideoPlayerForm : Form
 
         if (endedHandled)
         {
-            DebugLog?.Invoke("  (duplicate end ignored)");
+            Dbg("  (duplicate end ignored)");
             return;
         }
 
@@ -2028,7 +2043,7 @@ internal sealed class VideoPlayerForm : Form
         }
         catch (Exception ex)
         {
-            DebugLog?.Invoke("resume after failure: " + ex.Message);
+            Dbg("resume after failure: " + ex.Message);
         }
     }
 
@@ -2040,7 +2055,7 @@ internal sealed class VideoPlayerForm : Form
             Func<bool> next = fallback;
             fallback = null;
 
-            DebugLog?.Invoke("direct playback failed (" + error?.Message + "), converting");
+            Dbg("direct playback failed (" + error?.Message + "), converting");
             Say("Converting for playback...");
 
             if (next())
@@ -2052,7 +2067,7 @@ internal sealed class VideoPlayerForm : Form
         if (Current.File == null && !LocalMedia.IsLocalId(Current.Id) && streamRetries < 4)
         {
             streamRetries++;
-            DebugLog?.Invoke($"stream failed ({error?.Message}), trying again ({streamRetries} of 4)");
+            Dbg($"stream failed ({error?.Message}), trying again ({streamRetries} of 4)");
             Say("Reconnecting...");
 
             YtDlp.Forget(Current.Id);
@@ -2695,7 +2710,7 @@ internal sealed class VideoPlayerForm : Form
     {
         endChoices = BuildChoices(6);
 
-        DebugLog?.Invoke($"ShowEndScreen(allowCountdown={allowCountdown}) autoplay={TubeLibrary.Instance.Settings.Autoplay} choices=[{string.Join(",", endChoices.Select(c => c.Title))}]");
+        Dbg($"ShowEndScreen(allowCountdown={allowCountdown}) autoplay={TubeLibrary.Instance.Settings.Autoplay} choices=[{string.Join(",", endChoices.Select(c => c.Title))}]");
 
         endCards.Children.Clear();
         endThumbs.Clear();
@@ -2869,7 +2884,7 @@ internal sealed class VideoPlayerForm : Form
 
     private void OnEndTick()
     {
-        DebugLog?.Invoke($"endTick counting={endCounting} remaining={endRemaining} visible={EndScreenVisible}");
+        Dbg($"endTick counting={endCounting} remaining={endRemaining} visible={EndScreenVisible}");
 
         // Thumbnails that were not ready yet appear as soon as they load.
         foreach ((WpfControls.Image image, TubeVideo video) in endThumbs)
@@ -2900,7 +2915,7 @@ internal sealed class VideoPlayerForm : Form
     /// <summary>Plays a video right after this one (or the next in the list).</summary>
     public void PlayChoice(TubeVideo video)
     {
-        DebugLog?.Invoke($"PlayChoice {video.Title} (from {Environment.StackTrace.Split('\n')[2].Trim()})");
+        Dbg($"PlayChoice {video.Title} (from {Environment.StackTrace.Split('\n')[2].Trim()})");
 
         int at = playlist.IndexOf(video);
 
@@ -2922,7 +2937,7 @@ internal sealed class VideoPlayerForm : Form
     private void HideEndScreen()
     {
         if (EndScreenVisible)
-            DebugLog?.Invoke("HideEndScreen from " + Environment.StackTrace.Split('\n')[2].Trim());
+            Dbg("HideEndScreen from " + Environment.StackTrace.Split('\n')[2].Trim());
 
         endTimer.Stop();
         endCounting = false;
@@ -2976,7 +2991,7 @@ internal sealed class VideoPlayerForm : Form
         if (position <= watchPosition + 0.05 && now - watchSince > 3000 && now - lastWatchLog > 5000)
         {
             lastWatchLog = now;
-            DebugLog?.Invoke($"watch: no movement for {(now - watchSince) / 1000.0:0.0}s at {position:0.0}s (restarts so far {stallRestarts}, duration {duration:0})");
+            Dbg($"watch: no movement for {(now - watchSince) / 1000.0:0.0}s at {position:0.0}s (restarts so far {stallRestarts}, duration {duration:0})");
         }
 
         if (watchPosition < 0 || position > watchPosition + 0.05 || position < watchPosition - 0.5)
@@ -3000,12 +3015,12 @@ internal sealed class VideoPlayerForm : Form
         {
             bridgeBase = beforeUpgrade;
             beforeUpgrade = null;
-            DebugLog?.Invoke($"stalled after upgrade at {position:0.0}s, going back");
+            Dbg($"stalled after upgrade at {position:0.0}s, going back");
             Say("Back to the smoother quality");
         }
         else
         {
-            DebugLog?.Invoke($"stalled at {position:0.0}s, reconnecting");
+            Dbg($"stalled at {position:0.0}s, reconnecting");
             Say("Reconnecting...");
         }
 
@@ -3085,12 +3100,57 @@ internal sealed class VideoPlayerForm : Form
         }
 
         UpdateMarks();
+        UpdateLoaded(position);
 
         time.Text = $"{Format(shown)} / {Format(duration)}";
 
         // Remember the position every few seconds.
         if (playing && Environment.TickCount64 - lastSave > 5000)
             SaveProgress();
+    }
+
+    // ---- the loaded part of the time bar ----
+    private long lastBufferLog;
+
+    private void UpdateLoaded(double position)
+    {
+        if (duration <= 0)
+        {
+            seek.SetLoaded(-1, -1);
+            return;
+        }
+
+        double from = 0;
+        double to;
+
+        if (bridged)
+        {
+            var loaded = proxy?.Loaded;
+
+            if (loaded == null)
+            {
+                // Between two streams (a seek or reconnect): nothing is known yet.
+                seek.SetLoaded(-1, -1);
+                return;
+            }
+
+            from = bridgeOffset;
+            to = loaded.Value.Complete ? duration : bridgeOffset + loaded.Value.Seconds;
+        }
+        else
+        {
+            // A saved file is all there; an online stream reports how much it has downloaded.
+            to = Current.File != null ? duration : media.DownloadProgress * duration;
+        }
+
+        to = Math.Min(duration, to);
+        seek.SetLoaded(from / duration, to / duration);
+
+        if (bridged && playing && Environment.TickCount64 - lastBufferLog > 5000)
+        {
+            lastBufferLog = Environment.TickCount64;
+            StreamLog.Write("player", $"buffer: playing {position:0.0}s, loaded up to {to:0.0}s ({to - position:0.0}s ahead)");
+        }
     }
 
     // ---- smooth time bar: ~60 updates a second between the player's coarse readings ----
@@ -3590,6 +3650,23 @@ internal sealed class SeekBar : Control
     public double MarkA { get; set; } = -1;
     public double MarkB { get; set; } = -1;
 
+    private double loadedFrom = -1;
+    private double loadedTo = -1;
+
+    /// <summary>The part of the video that is already loaded, as fractions (0..1); -1 for none.</summary>
+    public void SetLoaded(double from, double to)
+    {
+        from = from < 0 ? -1 : Math.Clamp(from, 0, 1);
+        to = to < 0 ? -1 : Math.Clamp(to, 0, 1);
+
+        if (Math.Abs(from - loadedFrom) < 0.0015 && Math.Abs(to - loadedTo) < 0.0015)
+            return;
+
+        loadedFrom = from;
+        loadedTo = to;
+        Invalidate();
+    }
+
     /// <summary>Raised when the user drags or clicks (value 0..1).</summary>
     public event Action<double>? UserChanged;
 
@@ -3685,6 +3762,28 @@ internal sealed class SeekBar : Control
         };
 
         g.DrawLine(track, left, mid, right, mid);
+
+        // the part that is already loaded (what can play without waiting)
+        if (loadedFrom >= 0 && loadedTo > loadedFrom)
+        {
+            float la = (float)(left + span * loadedFrom);
+            float lb = (float)(left + span * loadedTo);
+
+            using Pen loaded = new(Color.FromArgb(150, Theme.Strong), thin)
+            {
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.Round
+            };
+
+            g.DrawLine(loaded, la, mid, Math.Max(la, lb), mid);
+
+            // a small tick where loading has got to, so the front edge is easy to see
+            if (loadedTo < 0.999)
+            {
+                using Pen edge = new(Color.FromArgb(200, Theme.Strong), 1.5f);
+                g.DrawLine(edge, lb, mid - 5, lb, mid + 5);
+            }
+        }
 
         // the looped section
         if (MarkA >= 0)

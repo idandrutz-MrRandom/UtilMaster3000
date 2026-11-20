@@ -1215,6 +1215,32 @@ internal sealed class TubeLibrary
         lock (gate)
             cts = running[video.Id];
 
+        // A video that starts streaming while this one saves comes first: this download steps
+        // aside (what is already downloaded stays) and carries on once the stream has loaded.
+        using CancellationTokenSource yieldCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        bool yielded = false;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!yieldCts.IsCancellationRequested)
+                {
+                    await Task.Delay(400, yieldCts.Token);
+
+                    if (StreamProxy.StreamIsLoading)
+                    {
+                        yielded = true;
+                        yieldCts.Cancel();
+                    }
+                }
+            }
+            catch
+            {
+                // Finished or cancelled.
+            }
+        });
+
         try
         {
             // Thumbnail first so the video looks right in the library.
@@ -1229,7 +1255,9 @@ internal sealed class TubeLibrary
                     video.Eta = p.Eta;
                     Bump();
                 },
-                cts.Token);
+                yieldCts.Token);
+
+            yieldCts.Cancel();
 
             lock (gate)
             {
@@ -1242,6 +1270,19 @@ internal sealed class TubeLibrary
             }
 
             EnforceCap();
+        }
+        catch (OperationCanceledException) when (yielded && !cts.IsCancellationRequested)
+        {
+            // Stepped aside for a stream: back in the queue, picked up again when it is quiet.
+            lock (gate)
+            {
+                if (video.State == VideoState.Downloading)
+                {
+                    video.State = VideoState.Queued;
+                    video.Speed = "";
+                    video.Eta = "";
+                }
+            }
         }
         catch (OperationCanceledException)
         {

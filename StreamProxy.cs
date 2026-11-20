@@ -32,6 +32,12 @@ internal sealed class StreamProxy : IDisposable
     /// <summary>Diagnostics hook (tests).</summary>
     public static Action<string>? Trace { get; set; }
 
+    private static void Note(string message)
+    {
+        StreamLog.Write("proxy", message);
+        Trace?.Invoke(message);
+    }
+
     private readonly HttpListener listener = new();
     // Shared by every player window, so connections to YouTube (already
     // negotiated) are reused instead of set up again for each video.
@@ -149,7 +155,7 @@ internal sealed class StreamProxy : IDisposable
 
             if (target.Bridge != null)
             {
-                Trace?.Invoke($"bridge request: {context.Request.HttpMethod} range={context.Request.Headers["Range"] ?? "-"} token={token[..6]}");
+                Note($"bridge request: {context.Request.HttpMethod} range={context.Request.Headers["Range"] ?? "-"} token={token[..6]}");
                 await ServeBridge(context, token, target.Bridge);
                 return;
             }
@@ -227,7 +233,7 @@ internal sealed class StreamProxy : IDisposable
         }
         catch (Exception ex)
         {
-            Trace?.Invoke("proxy: request ended: " + ex.GetType().Name + " " + ex.Message);
+            Note("proxy: request ended: " + ex.GetType().Name + " " + ex.Message);
 
             // The player closes the connection whenever you seek or stop:
             // that is normal, not an error.
@@ -397,7 +403,7 @@ internal sealed class StreamProxy : IDisposable
                 // Speed of this successful request (retries and waits excluded).
                 if (data.Length >= 1_500_000)
                     NoteSpeed(data.Length, attemptClock.Elapsed.TotalSeconds);
-                Trace?.Invoke($"chunk {from / 1024}K+{data.Length / 1024}K ({MimeFromUrl(target.Url)})");
+                Note($"chunk {from / 1024}K+{data.Length / 1024}K ({MimeFromUrl(target.Url)})");
                 return data;
             }
             catch (Exception ex) when (
@@ -406,7 +412,7 @@ internal sealed class StreamProxy : IDisposable
             {
                 last = ex;
 
-                Trace?.Invoke($"chunk {from / 1024}K: {(ex is OperationCanceledException ? "no answer in time" : ex.Message)}, asking again");
+                Note($"chunk {from / 1024}K: {(ex is OperationCanceledException ? "no answer in time" : ex.Message)}, asking again");
 
                 if (waited.ElapsedMilliseconds > 45000)
                     throw;
@@ -480,6 +486,8 @@ internal sealed class StreamProxy : IDisposable
             Math.Min(end, from + (from == start ? FirstChunk : ChunkSize) - 1);
 
         Task<byte[]>? next = FetchChunk(target, position, ChunkEnd(position));
+        string kind = MimeFromUrl(target.Url);
+        Note($"serving {kind} from {start / 1024}K of {total / 1024}K");
 
         while (position <= end)
         {
@@ -493,8 +501,17 @@ internal sealed class StreamProxy : IDisposable
                 ? FetchChunk(target, position, ChunkEnd(position))
                 : null;
 
+            System.Diagnostics.Stopwatch writing = System.Diagnostics.Stopwatch.StartNew();
             await output.OutputStream.WriteAsync(data, stop.Token);
+
+            // The converter takes a piece in well under a second; longer means it stopped reading.
+            if (writing.ElapsedMilliseconds > 2500)
+                Note($"{kind}: the converter took {writing.Elapsed.TotalSeconds:0.0}s to accept the piece ending at {thisEnd / 1024}K");
+            else
+                Note($"{kind}: piece ending at {thisEnd / 1024}K accepted in {writing.ElapsedMilliseconds} ms");
         }
+
+        Note($"{kind}: all of it was handed over");
 
         output.Close();
     }
@@ -602,7 +619,17 @@ internal sealed class StreamProxy : IDisposable
     /// from the picture the user is watching.
     /// </summary>
     internal static bool StreamIsLoading =>
-        !RunningBridges.IsEmpty && Environment.TickCount64 - Interlocked.Read(ref lastBridgeActivity) < 3000;
+        Environment.TickCount64 < Interlocked.Read(ref startingUntil) ||
+        (!RunningBridges.IsEmpty && Environment.TickCount64 - Interlocked.Read(ref lastBridgeActivity) < 3000);
+
+    private static long startingUntil;
+
+    /// <summary>
+    /// A video is about to be streamed (the address is still being looked up): saving other
+    /// videos steps aside for the first seconds, which are the ones that decide if it pauses.
+    /// </summary>
+    internal static void NoteStarting() =>
+        Interlocked.Exchange(ref startingUntil, Environment.TickCount64 + 25000);
 
     private static void NoteBridgeActivity() => Interlocked.Exchange(ref lastBridgeActivity, Environment.TickCount64);
 
@@ -636,6 +663,45 @@ internal sealed class StreamProxy : IDisposable
         private readonly CancellationTokenSource cts;
         private readonly Process ffmpeg;
         private long buffered;
+        private long outMicros;
+        private int complete;
+        private long lastProgressLog;
+
+        private static readonly System.Text.RegularExpressions.Regex ProgressLine = new(
+            @"^(frame|fps|stream_\d+_\d+_q|bitrate|total_size|out_time_ms|out_time|dup_frames|drop_frames|speed|progress)=",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>How many seconds of the video the conversion has produced so far.</summary>
+        public double OutSeconds => Interlocked.Read(ref outMicros) / 1_000_000.0;
+
+        /// <summary>The conversion reached the end of the video.</summary>
+        public bool Complete => Volatile.Read(ref complete) == 1;
+
+        private string lastFields = "";
+
+        public void NoteField(string line)
+        {
+            if (line.StartsWith("total_size=") || line.StartsWith("speed=") || line.StartsWith("frame="))
+                lastFields = (lastFields.Length > 120 ? "" : lastFields + " ") + line;
+        }
+
+        public void NoteProgress(long micros)
+        {
+            Interlocked.Exchange(ref outMicros, micros);
+            NoteBridgeActivity();
+
+            long now = Environment.TickCount64;
+
+            if (now - lastProgressLog > 10000)
+            {
+                lastProgressLog = now;
+                string cpu = "";
+
+                try { cpu = $", ffmpeg cpu {ffmpeg.TotalProcessorTime.TotalSeconds:0.0}s"; } catch { }
+
+                StreamLog.Write("bridge", $"converted {micros / 1_000_000.0:0.0}s so far, {Interlocked.Read(ref buffered) / 1048576.0:0.0} MB waiting for the player{cpu} [{lastFields}]");
+            }
+        }
 
         public System.Threading.Channels.Channel<byte[]> Queue { get; } =
             System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
@@ -644,8 +710,11 @@ internal sealed class StreamProxy : IDisposable
 
         private readonly int processId;
 
-        private BridgeRun(Process process, CancellationToken outer)
+        private readonly string outputFile;
+
+        private BridgeRun(Process process, CancellationToken outer, string outputFile)
         {
+            this.outputFile = outputFile;
             ffmpeg = process;
             processId = process.Id;
             cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
@@ -662,36 +731,62 @@ internal sealed class StreamProxy : IDisposable
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
 
-            foreach (string a in spec.BuildArguments())
+            // The converter writes to a file at full speed (nothing the player does can slow it
+            // down) and the player is fed from that file as it grows.
+            string folder = Path.Combine(Path.GetTempPath(), "UtilMaster3000-stream");
+            Directory.CreateDirectory(folder);
+            CleanOldFiles(folder);
+            string outputFile = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".mp4");
+
+            foreach (string a in spec.BuildArguments(outputFile))
                 info.ArgumentList.Add(a);
 
             Process process = Process.Start(info)!;
             ChildJob.Add(process);
             RunningBridges[process.Id] = process;
             NoteBridgeActivity();
-            Trace?.Invoke("bridge: ffmpeg started");
+            Note("bridge: ffmpeg started");
 
             try
             {
-                process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                // Converting the picture (not just copying it) must keep ahead of playback,
+                // so it gets a normal share of the processor; copying is light work.
+                process.PriorityClass = spec.CopyVideo ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal;
             }
             catch
             {
                 // Not important.
             }
 
+            BridgeRun run = new(process, outer, outputFile);
+
             process.ErrorDataReceived += (_, e) =>
             {
-                if (e.Data != null)
-                    Trace?.Invoke("ffmpeg: " + e.Data);
+                if (e.Data == null)
+                    return;
+
+                // "-progress" lines: how far the conversion has got.
+                if (e.Data.StartsWith("out_time_us=", StringComparison.Ordinal))
+                {
+                    if (long.TryParse(e.Data.AsSpan(12), out long micros) && micros >= 0)
+                        run.NoteProgress(micros);
+
+                    return;
+                }
+
+                if (ProgressLine.IsMatch(e.Data))
+                {
+                    run.NoteField(e.Data);
+                    return;
+                }
+
+                Note("ffmpeg: " + e.Data);
             };
             process.BeginErrorReadLine();
 
-            BridgeRun run = new(process, outer);
             _ = Task.Run(run.Produce);
             return run;
         }
@@ -703,28 +798,62 @@ internal sealed class StreamProxy : IDisposable
         {
             try
             {
-                Stream body = ffmpeg.StandardOutput.BaseStream;
                 byte[] buffer = new byte[128 * 1024];
                 int read;
                 bool first = true;
+                FileStream? body = null;
 
-                while ((read = await body.ReadAsync(buffer, cts.Token)) > 0)
+                // The converter creates the file a moment after it starts.
+                while (body == null)
                 {
-                    NoteBridgeActivity();
-
-                    if (first)
+                    try
                     {
-                        first = false;
-                        Trace?.Invoke("bridge: first output bytes");
-                        FirstOutput.TrySetResult(true);
+                        body = new FileStream(outputFile, FileMode.Open, FileAccess.Read,
+                            FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous);
                     }
+                    catch (Exception ex) when (ex is IOException && !cts.IsCancellationRequested && !ffmpeg.HasExited)
+                    {
+                        await Task.Delay(30, cts.Token);
+                    }
+                }
 
-                    // Far enough ahead: wait for the player to catch up.
-                    while (Interlocked.Read(ref buffered) > ReadAheadBytes)
-                        await Task.Delay(100, cts.Token);
+                using (body)
+                {
+                    while (true)
+                    {
+                        read = await body.ReadAsync(buffer, cts.Token);
 
-                    Interlocked.Add(ref buffered, read);
-                    await Queue.Writer.WriteAsync(buffer.AsMemory(0, read).ToArray(), cts.Token);
+                        if (read == 0)
+                        {
+                            // Caught up with the converter: wait for more, or finish if it is done.
+                            if (!ffmpeg.HasExited)
+                            {
+                                await Task.Delay(30, cts.Token);
+                                continue;
+                            }
+
+                            read = await body.ReadAsync(buffer, cts.Token);
+
+                            if (read == 0)
+                                break;
+                        }
+
+                        NoteBridgeActivity();
+
+                        if (first)
+                        {
+                            first = false;
+                            Note("bridge: first output bytes");
+                            FirstOutput.TrySetResult(true);
+                        }
+
+                        // Far enough ahead: wait for the player to catch up.
+                        while (Interlocked.Read(ref buffered) > ReadAheadBytes)
+                            await Task.Delay(100, cts.Token);
+
+                        Interlocked.Add(ref buffered, read);
+                        await Queue.Writer.WriteAsync(buffer.AsMemory(0, read).ToArray(), cts.Token);
+                    }
                 }
             }
             catch
@@ -735,6 +864,51 @@ internal sealed class StreamProxy : IDisposable
             {
                 FirstOutput.TrySetResult(false);
                 Queue.Writer.TryComplete();
+                LogEnd();
+            }
+        }
+
+        // Says how the conversion ended: finished, or stopped early (and why).
+        private void LogEnd()
+        {
+            try
+            {
+                if (cts.IsCancellationRequested)
+                {
+                    StreamLog.Write("bridge", $"stopped at {OutSeconds:0.0}s (the player moved on)");
+                    return;
+                }
+
+                bool exited = ffmpeg.WaitForExit(3000);
+                int code = exited ? ffmpeg.ExitCode : -1;
+
+                if (code == 0)
+                    Interlocked.Exchange(ref complete, 1);
+
+                StreamLog.Write("bridge", code == 0
+                    ? $"conversion finished ({OutSeconds:0.0}s of video)"
+                    : $"CONVERSION ENDED EARLY at {OutSeconds:0.0}s (ffmpeg exit code {(exited ? code.ToString() : "still running")})");
+            }
+            catch
+            {
+                // Already cleaned up.
+            }
+        }
+
+        // Converted files of earlier runs (a crash, a forced close) are not kept.
+        private static void CleanOldFiles(string folder)
+        {
+            try
+            {
+                foreach (string file in Directory.GetFiles(folder, "*.mp4"))
+                {
+                    if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > TimeSpan.FromHours(3))
+                        File.Delete(file);
+                }
+            }
+            catch
+            {
+                // Not important.
             }
         }
 
@@ -765,6 +939,33 @@ internal sealed class StreamProxy : IDisposable
 
             RunningBridges.TryRemove(processId, out _);
             ffmpeg.Dispose();
+
+            try
+            {
+                File.Delete(outputFile);
+            }
+            catch
+            {
+                // Still open for a moment: removed by the next cleanup.
+            }
+        }
+    }
+
+    private volatile BridgeRun? currentRun;
+
+    /// <summary>A new stream is about to start: what the last one had loaded no longer applies.</summary>
+    public void ResetLoaded() => currentRun = null;
+
+    /// <summary>
+    /// How far into the video (seconds from where this conversion started) the picture is
+    /// already converted and waiting; null when nothing is being served.
+    /// </summary>
+    public (double Seconds, bool Complete)? Loaded
+    {
+        get
+        {
+            BridgeRun? run = currentRun;
+            return run == null ? null : (run.OutSeconds, run.Complete);
         }
     }
 
@@ -794,6 +995,8 @@ internal sealed class StreamProxy : IDisposable
                 return;
             }
 
+            currentRun = run;
+
             output.StatusCode = 200;
             output.ContentType = "video/mp4";
             output.SendChunked = true;
@@ -820,7 +1023,8 @@ internal sealed class StreamProxy : IDisposable
         }
         finally
         {
-            // The player left (seek, stop, close): end the conversion.
+            // The player left (seek, stop, close): end the conversion. (How far it got is
+            // still reported until the next stream starts, for the loaded part of the time bar.)
             run?.Dispose();
         }
     }
@@ -852,9 +1056,14 @@ internal sealed record BridgeInput(string Source, Dictionary<string, string>? He
 internal sealed record BridgeSpec(
     List<BridgeInput> Inputs, double StartSeconds, bool CopyVideo)
 {
-    public IEnumerable<string> BuildArguments()
+    public IEnumerable<string> BuildArguments(string outputFile)
     {
-        List<string> a = new() { "-hide_banner", "-loglevel", "error", "-nostdin" };
+        List<string> a = new()
+        {
+            "-hide_banner", "-loglevel", "error", "-nostdin",
+            // How far the conversion has got (read by the time bar's loaded display).
+            "-progress", "pipe:2", "-stats_period", "0.5"
+        };
 
         foreach (BridgeInput input in Inputs)
         {
@@ -925,7 +1134,7 @@ internal sealed record BridgeSpec(
         {
             "-sn", "-dn", "-flush_packets", "1",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4", "pipe:1"
+            "-y", "-f", "mp4", outputFile
         });
 
         return a;
