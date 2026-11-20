@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -421,28 +422,30 @@ internal static class YtDlp
     {
         string key = videoId + "@" + maxHeight;
 
-        if (PlanCache.ContainsKey(key) || videoId.StartsWith("loc_") || DateTime.UtcNow < blockedUntil)
+        if ((PlanCache.TryGetValue(key, out var cached) && cached.Expires > DateTime.UtcNow) ||
+            videoId.StartsWith("loc_") ||
+            DateTime.UtcNow < blockedUntil)
+        {
             return;
+        }
 
         Prefetching.GetOrAdd(key, _ => Task.Run(async () =>
         {
             await PrefetchGate.WaitAsync();
             PrefetchStarted[key] = true;
 
-            // A video you clicked comes first: do not compete with it.
-            while (Volatile.Read(ref clickedLookups) > 0 && DateTime.UtcNow >= blockedUntil)
-                await Task.Delay(150);
-
-            if (DateTime.UtcNow < blockedUntil)
-            {
-                PrefetchGate.Release();
-                PrefetchStarted.TryRemove(key, out bool _);
-                Prefetching.TryRemove(key, out Task? _);
-                return;
-            }
-
             try
             {
+                // A video you clicked comes first: do not compete with it.
+                while (Volatile.Read(ref clickedLookups) > 0 && DateTime.UtcNow >= blockedUntil)
+                    await Task.Delay(150);
+
+                if (DateTime.UtcNow < blockedUntil ||
+                    PlanCache.TryGetValue(key, out var prepared) && prepared.Expires > DateTime.UtcNow)
+                {
+                    return;
+                }
+
                 // (Resolved here directly: PlanAsync would wait for this very task.)
                 StreamPlan plan = await ResolvePlanAsync(videoId, null, maxHeight, CancellationToken.None);
                 PlanCache[key] = (plan, DateTime.UtcNow.AddMinutes(90));
@@ -478,13 +481,16 @@ internal static class YtDlp
         if (cookieFile == null)
         {
             if (PlanCache.TryGetValue(key, out var cached) && cached.Expires > DateTime.UtcNow)
-                return cached.Plan;
+                return WarmPlan(cached.Plan);
 
-            // Being resolved right now (a prefetch, at any quality): wait for it.
+            // Wait only for an in-progress prefetch that can satisfy this request.
             string prefix = videoId + "@";
             Task? running = Prefetching
                 .Where(p => p.Key.StartsWith(prefix) && PrefetchStarted.ContainsKey(p.Key))
-                .Select(p => p.Value)
+                .Select(p => (Height: PrefetchHeight(p.Key, prefix), Task: p.Value))
+                .Where(p => p.Height >= 480 && p.Height <= maxHeight)
+                .OrderByDescending(p => p.Height)
+                .Select(p => p.Task)
                 .FirstOrDefault();
 
             if (running != null)
@@ -492,7 +498,7 @@ internal static class YtDlp
                 try { await running.WaitAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
 
                 if (PlanCache.TryGetValue(key, out cached) && cached.Expires > DateTime.UtcNow)
-                    return cached.Plan;
+                    return WarmPlan(cached.Plan);
             }
 
             // Already prepared at another quality that is good enough (not above what
@@ -505,7 +511,7 @@ internal static class YtDlp
                 .FirstOrDefault();
 
             if (close != null)
-                return close;
+                return WarmPlan(close);
         }
 
         StreamPlan plan;
@@ -524,8 +530,17 @@ internal static class YtDlp
         if (cookieFile == null)
             PlanCache[key] = (plan, DateTime.UtcNow.AddMinutes(90));
 
-        StreamProxy.Warm(plan.Inputs.Select(i => (i.Url, (Dictionary<string, string>?)i.Headers)));
+        return WarmPlan(plan);
+    }
 
+    private static int PrefetchHeight(string key, string prefix) =>
+        int.TryParse(key.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out int height)
+            ? height
+            : 0;
+
+    private static StreamPlan WarmPlan(StreamPlan plan)
+    {
+        StreamProxy.Warm(plan.Inputs.Select(i => (i.Url, (Dictionary<string, string>?)i.Headers)));
         return plan;
     }
 
@@ -567,7 +582,20 @@ internal static class YtDlp
     {
         try
         {
-            StreamPlan plan = await ResolveWithAccountAsync(videoId, cookieFile, maxHeight, ct);
+            StreamPlan plan;
+
+            try
+            {
+                plan = await ResolveWithAccountAsync(videoId, cookieFile, maxHeight, ct);
+            }
+            catch (Exception ex) when (
+                TubeLibrary.Instance.Settings.UseChromeCookiesForStreaming &&
+                ShouldTryBrowserCookies(ex))
+            {
+                plan = await ResolvePlanWithAsync(
+                    videoId, null, maxHeight, ct, browserName: "chrome");
+            }
+
             blockedUntil = DateTime.MinValue;
             return plan;
         }
@@ -586,49 +614,101 @@ internal static class YtDlp
         }
     }
 
-    // Signed in: every lookup goes through the account, which YouTube
-    // almost never challenges. Without one (or if it is refused), anonymous.
+    private static bool ShouldTryBrowserCookies(Exception ex) =>
+        ex is AuthExpiredException ||
+        ex is InvalidOperationException invalid &&
+        (IsFormatSelectionError(invalid.Message) ||
+         Regex.IsMatch(invalid.Message, @"sign in|log ?in|not a bot|rate.?limit|HTTP Error 429",
+             RegexOptions.IgnoreCase));
+
+    // Public streams are faster without cookies; use the saved account only
+    // when YouTube requires it or the anonymous response has no usable formats.
     private static async Task<StreamPlan> ResolveWithAccountAsync(
         string videoId, string? cookieFile, int maxHeight, CancellationToken ct)
     {
-        if (cookieFile == null && YtAccount.SignedIn)
+        if (cookieFile != null)
         {
             try
             {
-                return await YtAccount.WithCookieFile(file =>
-                    ResolvePlanWithAsync(videoId, file, maxHeight, ct));
+                return await ResolvePlanWithAsync(videoId, cookieFile, maxHeight, ct);
             }
             catch (AuthExpiredException)
             {
-                // The saved session was refused: try without it.
+                // The explicit session was refused: try public formats.
+            }
+            catch (InvalidOperationException ex) when (IsFormatSelectionError(ex.Message))
+            {
+                // The account response may omit formats available anonymously.
             }
         }
 
-        return await ResolvePlanWithAsync(videoId, cookieFile, maxHeight, ct);
+        try
+        {
+            return await ResolvePlanWithAsync(videoId, null, maxHeight, ct);
+        }
+        catch (Exception ex) when (
+            cookieFile == null &&
+            YtAccount.SignedIn &&
+            ShouldRetryWithAccount(ex))
+        {
+            return await YtAccount.WithCookieFile(file =>
+                ResolvePlanWithAsync(videoId, file, maxHeight, ct));
+        }
     }
 
+    private static bool ShouldRetryWithAccount(Exception ex) =>
+        ex is AuthExpiredException ||
+        ex is InvalidOperationException invalid &&
+        (IsFormatSelectionError(invalid.Message) ||
+         Regex.IsMatch(invalid.Message, @"sign in|log ?in|not a bot|rate.?limit|HTTP Error 429",
+             RegexOptions.IgnoreCase));
+
+    private static bool IsFormatSelectionError(string message) =>
+        Regex.IsMatch(message, @"Requested format is not available|No video formats",
+            RegexOptions.IgnoreCase);
+
     private static async Task<StreamPlan> ResolvePlanWithAsync(
-        string videoId, string? cookieFile, int maxHeight, CancellationToken ct)
+        string videoId, string? cookieFile, int maxHeight, CancellationToken ct,
+        string? browserName = null)
     {
         try
         {
-            return await ResolvePlanCoreAsync(videoId, cookieFile, maxHeight, ct, noSkip: false);
+            return await ResolvePlanCoreAsync(
+                videoId, cookieFile, maxHeight, ct, noSkip: false, browserName: browserName);
         }
         catch (InvalidOperationException ex) when (
-            !Regex.IsMatch(ex.Message, @"Video unavailable|is not available|Private video|has been removed|terminated|account associated", RegexOptions.IgnoreCase))
+            !Regex.IsMatch(ex.Message,
+                @"Video unavailable|(?:This )?video(?:\s+'[^']+')?\s+is not available|Private video|has been removed|terminated|account associated",
+                RegexOptions.IgnoreCase))
         {
             // Maybe a live stream or an unusual video: look at everything.
             // (A video that is plainly gone is not asked about twice.)
-            return await ResolvePlanCoreAsync(videoId, cookieFile, maxHeight, ct, noSkip: true);
+            try
+            {
+                return await ResolvePlanCoreAsync(
+                    videoId, cookieFile, maxHeight, ct, noSkip: true, browserName: browserName);
+            }
+            catch (InvalidOperationException retryEx) when (
+                IsFormatSelectionError(retryEx.Message))
+            {
+                // If the preferred selector still has no match, let yt-dlp pick
+                // any available video/audio pair rather than failing playback.
+                return await ResolvePlanCoreAsync(
+                    videoId, cookieFile, maxHeight, ct, noSkip: true,
+                    formatSelector: "bestvideo*+bestaudio/best",
+                    browserName: browserName);
+            }
         }
     }
 
     private static async Task<StreamPlan> ResolvePlanCoreAsync(
-        string videoId, string? cookieFile, int maxHeight, CancellationToken ct, bool noSkip)
+        string videoId, string? cookieFile, int maxHeight, CancellationToken ct, bool noSkip,
+        string? formatSelector = null, string? browserName = null)
     {
         List<string> args = new()
         {
-            "--no-playlist", "--no-warnings", "--dump-json", "-f", StreamSelector(maxHeight)
+            "--no-playlist", "--no-warnings", "--dump-json", "-f",
+            formatSelector ?? StreamSelector(maxHeight)
         };
 
         // Skipping YouTube's extra stream lists saves over a second.
@@ -644,10 +724,22 @@ internal static class YtDlp
             args.Add("--cookies");
             args.Add(cookieFile);
         }
+        else if (browserName != null)
+        {
+            args.Add("--cookies-from-browser");
+            args.Add(browserName);
+        }
 
         args.Add("https://www.youtube.com/watch?v=" + videoId);
 
+        Stopwatch lookup = Stopwatch.StartNew();
         ProcResult r = await RunAsync(args, ct);
+        string source = browserName != null
+            ? "Chrome cookies"
+            : cookieFile != null ? "UtilTube cookies" : "anonymous";
+        string selection = formatSelector == null ? $"{maxHeight}p" : "any quality";
+        StreamLog.Write("yt-dlp",
+            $"{videoId} {source} {selection} lookup took {lookup.Elapsed.TotalSeconds:0.0}s (exit {r.ExitCode})");
         string json = r.Stdout.Trim();
 
         if (r.ExitCode != 0 || !json.StartsWith('{'))
@@ -989,7 +1081,14 @@ internal static class YtDlp
             string json = r.Stdout.Trim();
 
             if (!json.StartsWith('{'))
-                throw new InvalidOperationException(LastError(r.Stderr) ?? "Could not look up the subtitles.");
+            {
+                string? error = LastError(r.Stderr);
+
+                if (error != null && LooksLikeAuthError(error))
+                    throw new AuthExpiredException();
+
+                throw new InvalidOperationException(error ?? "Could not look up the subtitles.");
+            }
 
             using JsonDocument doc = JsonDocument.Parse(json);
             List<SubtitleTrack> tracks = new();
@@ -1002,10 +1101,15 @@ internal static class YtDlp
                     return;
                 }
 
-                foreach (JsonProperty lang in all.EnumerateObject())
+                JsonProperty[] languages = all.EnumerateObject().ToArray();
+                bool hasOriginalTrack = auto && languages.Any(lang =>
+                    lang.Name.EndsWith("-orig", StringComparison.OrdinalIgnoreCase));
+
+                foreach (JsonProperty lang in languages)
                 {
                     // Automatic captions come in 100+ translations; keep the spoken language only.
-                    if (auto && !lang.Name.EndsWith("-orig", StringComparison.OrdinalIgnoreCase))
+                    bool originalTrack = lang.Name.EndsWith("-orig", StringComparison.OrdinalIgnoreCase);
+                    if (auto && hasOriginalTrack && !originalTrack)
                         continue;
 
                     JsonElement? best = null;
@@ -1028,7 +1132,7 @@ internal static class YtDlp
                     if (best == null)
                         continue;
 
-                    string code = auto ? lang.Name[..^5] : lang.Name;
+                    string code = auto && originalTrack ? lang.Name[..^5] : lang.Name;
                     string name = Str(best.Value, "name") ?? code;
 
                     tracks.Add(new SubtitleTrack(
@@ -1056,6 +1160,80 @@ internal static class YtDlp
         }
 
         return await Run(null);
+    }
+
+    public static async Task<(string Text, string Ext)> DownloadSubtitleAsync(
+        string videoId, SubtitleTrack track, CancellationToken ct)
+    {
+        string folder = Path.Combine(
+            Path.GetTempPath(), "UtilMaster3000", "sub_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            async Task<(string Text, string Ext)> Run(string? cookies)
+            {
+                List<string> args = new()
+                {
+                    "--no-playlist", "--no-warnings", "--skip-download",
+                    track.Auto ? "--write-auto-subs" : "--write-subs",
+                    "--sub-langs", track.Language,
+                    "--sub-format", track.Ext,
+                    "--output", Path.Combine(folder, "%(id)s.%(ext)s")
+                };
+
+                if (cookies != null)
+                {
+                    args.Add("--cookies");
+                    args.Add(cookies);
+                }
+
+                args.Add("https://www.youtube.com/watch?v=" + videoId);
+
+                ProcResult result = await RunAsync(args, ct);
+
+                if (result.ExitCode != 0)
+                {
+                    string error = LastError(result.Stderr) ?? "Could not download subtitles.";
+
+                    if (LooksLikeAuthError(error))
+                        throw new AuthExpiredException();
+
+                    throw new InvalidOperationException(error);
+                }
+
+                string? file = Directory.EnumerateFiles(folder).FirstOrDefault();
+
+                if (file == null)
+                {
+                    throw new InvalidOperationException(
+                        LastError(result.Stderr) ?? "yt-dlp did not produce a subtitle file.");
+                }
+
+                string text = await File.ReadAllTextAsync(file, ct);
+                string ext = Path.GetExtension(file).TrimStart('.');
+                return (text, ext);
+            }
+
+            if (YtAccount.SignedIn)
+            {
+                try
+                {
+                    return await YtAccount.WithCookieFile(Run);
+                }
+                catch (AuthExpiredException)
+                {
+                    // Public captions can still be available without a valid session.
+                }
+            }
+
+            return await Run(null);
+        }
+        finally
+        {
+            if (Directory.Exists(folder))
+                Directory.Delete(folder, recursive: true);
+        }
     }
 
     /// <summary>The playlist id in a link (any form with list=...) or a bare id.</summary>

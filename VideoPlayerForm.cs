@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
 using WpfControls = System.Windows.Controls;
+using WpfInput = System.Windows.Input;
 using WpfImaging = System.Windows.Media.Imaging;
 using WpfInterop = System.Windows.Interop;
 using WpfMedia = System.Windows.Media;
@@ -99,6 +100,11 @@ internal sealed class VideoPlayerForm : Form
     private double pictureZoom = 1;
 
     private readonly ElementHost host = new() { Dock = DockStyle.Fill, TabStop = false };
+    private readonly WpfControls.Grid surface = new()
+    {
+        Background = WpfMedia.Brushes.Black,
+        Focusable = true
+    };
 
     // "Up next" screen shown when a video ends.
     private readonly WpfControls.Grid endScreen = new()
@@ -326,6 +332,48 @@ internal sealed class VideoPlayerForm : Form
             base.ProcessCmdKey(ref msg, keyData);
     }
 
+    private sealed class ScreenFadeOverlay : Form
+    {
+        public ScreenFadeOverlay(Rectangle bounds)
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            Bounds = bounds;
+            BackColor = Color.Black;
+            Opacity = 0;
+            TopMost = true;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams p = base.CreateParams;
+                p.ExStyle |= 0x08000000 | 0x00000080;
+                return p;
+            }
+        }
+
+        public async Task FadeToAsync(double target, int durationMs)
+        {
+            double start = Opacity;
+            Stopwatch clock = Stopwatch.StartNew();
+
+            while (clock.ElapsedMilliseconds < durationMs)
+            {
+                double progress = Math.Clamp(clock.Elapsed.TotalMilliseconds / durationMs, 0, 1);
+                progress = progress * progress * (3 - 2 * progress);
+                Opacity = start + (target - start) * progress;
+                await Task.Delay(15);
+            }
+
+            Opacity = target;
+        }
+    }
+
     internal bool ForwardKey(Keys keyData)
     {
         Message none = default;
@@ -473,6 +521,7 @@ internal sealed class VideoPlayerForm : Form
     private FormBorderStyle savedBorder;
     private Rectangle savedBounds;
     private FormWindowState savedState;
+    private bool fullscreenTransition;
     private Point lastMouse;
     private long lastMove;
 
@@ -624,7 +673,6 @@ internal sealed class VideoPlayerForm : Form
             lastVolume = Math.Clamp(TubeLibrary.Instance.Settings.DefaultVolume, 0, 100) / 100.0;
 
         // The video surface: a black grid so letterboxing stays black.
-        WpfControls.Grid surface = new() { Background = WpfMedia.Brushes.Black };
         surface.Children.Add(media);
         surface.Children.Add(picture);
         BuildEndScreen();
@@ -633,9 +681,27 @@ internal sealed class VideoPlayerForm : Form
         surface.Children.Add(subtitleText);
         host.Child = surface;
 
+        surface.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key != WpfInput.Key.Left && e.Key != WpfInput.Key.Right)
+                return;
+
+            Keys key = e.Key == WpfInput.Key.Left ? Keys.Left : Keys.Right;
+            WpfInput.ModifierKeys modifiers = WpfInput.Keyboard.Modifiers;
+            if ((modifiers & WpfInput.ModifierKeys.Shift) != 0)
+                key |= Keys.Shift;
+            if ((modifiers & WpfInput.ModifierKeys.Control) != 0)
+                key |= Keys.Control;
+
+            if (ForwardKey(key))
+                e.Handled = true;
+        };
+
         // Click = play / pause, double click = fullscreen, wheel = volume.
         surface.MouseLeftButtonDown += (_, e) =>
         {
+            surface.Focus();
+
             if (e.ClickCount == 2)
                 ToggleFullscreen();
             else
@@ -671,8 +737,19 @@ internal sealed class VideoPlayerForm : Form
         barWindow = new BarWindow();
         barWindow.Controls.Add(bar);
 
-        LocationChanged += (_, _) => PlaceBar();
-        SizeChanged += (_, _) => { UpdateSidebar(); PlaceBar(); };
+        LocationChanged += (_, _) =>
+        {
+            if (!fullscreenTransition)
+                PlaceBar();
+        };
+        SizeChanged += (_, _) =>
+        {
+            if (!fullscreenTransition)
+            {
+                UpdateSidebar();
+                PlaceBar();
+            }
+        };
         Shown += (_, _) =>
         {
             PlaceBar();
@@ -1427,18 +1504,11 @@ internal sealed class VideoPlayerForm : Form
 
         try
         {
-            StreamPlan plan;
+            Stopwatch planClock = Stopwatch.StartNew();
+            StreamPlan plan = await YtDlp.PlanAsync(
+                video.Id, null, YtDlp.StartHeight, token);
 
-            try
-            {
-                plan = await YtDlp.PlanAsync(video.Id, null, YtDlp.StartHeight, token);
-            }
-            catch (AuthExpiredException) when (YtAccount.SignedIn)
-            {
-                // Age-restricted: this one video needs your account.
-                plan = await YtAccount.WithCookieFile(file =>
-                    YtDlp.PlanAsync(video.Id, file, YtDlp.StartHeight, token));
-            }
+            Dbg($"stream plan ready in {planClock.Elapsed.TotalSeconds:0.0}s at {plan.Height}p");
 
             if (token.IsCancellationRequested || IsDisposed || index != target)
                 return;
@@ -1578,24 +1648,35 @@ internal sealed class VideoPlayerForm : Form
     private List<SubtitleTrack>? subTracks;
     private List<Cue> subCues = new();
     private string subLabel = "";
-    private int subLoading;
+    private string? subLoadingId;
+    private Task? subLoadingTask;
+    private string? subtitleAutoLoadId;
+    private CancellationTokenSource? subtitleDownloadCts;
     private int lastCue = -1;
-
-    private static readonly System.Net.Http.HttpClient SubtitleHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     private void ClearSubtitles()
     {
+        CancelSubtitleDownload();
         subTracks = null;
         subCues = new List<Cue>();
         subLabel = "";
+        subtitleAutoLoadId = null;
         lastCue = -1;
         subtitleText.Visibility = System.Windows.Visibility.Collapsed;
+    }
+
+    private void CancelSubtitleDownload()
+    {
+        CancellationTokenSource? cts = subtitleDownloadCts;
+        subtitleDownloadCts = null;
+        cts?.Cancel();
     }
 
     private bool SubtitlesAvailable => !LocalMedia.IsLocalId(Current.Id) && !imageMode;
 
     private ToolStripMenuItem BuildSubtitleMenu(Point where)
     {
+        string videoId = Current.Id;
         string state = subCues.Count > 0 ? ": " + subLabel : "";
         ToolStripMenuItem subs = new("Subtitles" + state + "   (C)");
 
@@ -1611,7 +1692,7 @@ internal sealed class VideoPlayerForm : Form
             {
                 await LoadSubtitleTracksAsync();
 
-                if (!IsDisposed)
+                if (!IsDisposed && Current.Id == videoId)
                     BeginInvoke(() => ShowMenu(where));
             });
 
@@ -1634,23 +1715,37 @@ internal sealed class VideoPlayerForm : Form
             SubtitleTrack captured = track;
 
             ToolStripMenuItem item = new(track.Name) { Checked = subCues.Count > 0 && subLabel == track.Name };
-            item.Click += async (_, _) => await ChooseSubtitleAsync(captured);
+            item.Click += async (_, _) => await ChooseSubtitleAsync(captured, videoId);
             subs.DropDownItems.Add(item);
         }
 
         return subs;
     }
 
-    private async Task LoadSubtitleTracksAsync()
+    private Task LoadSubtitleTracksAsync()
     {
-        if (!SubtitlesAvailable || subTracks != null || Interlocked.Exchange(ref subLoading, 1) == 1)
-            return;
+        if (!SubtitlesAvailable || subTracks != null)
+            return Task.CompletedTask;
 
         string id = Current.Id;
-        Say("Looking for subtitles...");
+        if (subLoadingId == id && subLoadingTask != null)
+            return subLoadingTask;
 
+        TaskCompletionSource<bool> completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        subLoadingId = id;
+        subLoadingTask = completion.Task;
+        _ = LoadSubtitleTracksCoreAsync(id, completion);
+        return completion.Task;
+    }
+
+    private async Task LoadSubtitleTracksCoreAsync(
+        string id, TaskCompletionSource<bool> completion)
+    {
         try
         {
+            Say("Looking for subtitles...");
+
             List<SubtitleTrack> tracks = await YtDlp.SubtitlesAsync(id, CancellationToken.None);
 
             if (IsDisposed || Current.Id != id)
@@ -1666,7 +1761,13 @@ internal sealed class VideoPlayerForm : Form
         }
         finally
         {
-            Interlocked.Exchange(ref subLoading, 0);
+            if (subLoadingId == id)
+            {
+                subLoadingId = null;
+                subLoadingTask = null;
+            }
+
+            completion.TrySetResult(true);
         }
     }
 
@@ -1696,16 +1797,44 @@ internal sealed class VideoPlayerForm : Form
             return;
         }
 
+        string id = Current.Id;
         await LoadSubtitleTracksAsync();
+
+        if (IsDisposed || Current.Id != id)
+            return;
 
         SubtitleTrack? track = PickTrack();
 
-        if (track != null && !IsDisposed)
-            await ChooseSubtitleAsync(track);
+        if (track != null)
+        {
+            string wanted = TubeLibrary.Instance.Settings.SubtitleLanguage;
+            bool rememberLanguage = wanted.Length == 0 || track.Language == wanted;
+            await ChooseSubtitleAsync(track, id, rememberLanguage);
+        }
+    }
+
+    private async Task RestorePreferredSubtitlesAsync(string videoId)
+    {
+        if (subtitleAutoLoadId == videoId ||
+            string.IsNullOrWhiteSpace(TubeLibrary.Instance.Settings.SubtitleLanguage))
+        {
+            return;
+        }
+
+        subtitleAutoLoadId = videoId;
+        await LoadSubtitleTracksAsync();
+
+        if (IsDisposed || Current.Id != videoId || subCues.Count > 0)
+            return;
+
+        SubtitleTrack? track = PickTrack();
+        if (track != null)
+            await ChooseSubtitleAsync(track, videoId, rememberLanguage: false);
     }
 
     private void SubtitlesOff()
     {
+        CancelSubtitleDownload();
         subCues = new List<Cue>();
         subLabel = "";
         lastCue = -1;
@@ -1716,17 +1845,26 @@ internal sealed class VideoPlayerForm : Form
         Say("Subtitles off");
     }
 
-    private async Task ChooseSubtitleAsync(SubtitleTrack track)
+    private async Task ChooseSubtitleAsync(
+        SubtitleTrack track, string videoId, bool rememberLanguage = true)
     {
-        string id = Current.Id;
+        if (IsDisposed || Current.Id != videoId)
+            return;
+
+        CancelSubtitleDownload();
+        CancellationTokenSource cts = new();
+        subtitleDownloadCts = cts;
         Say("Loading subtitles...");
 
         try
         {
-            string text = await SubtitleHttp.GetStringAsync(track.Url);
-            List<Cue> cues = track.Ext == "json3" ? ParseJson3(text) : ParseVtt(text);
+            (string text, string ext) = await YtDlp.DownloadSubtitleAsync(
+                videoId, track, cts.Token);
+            List<Cue> cues = ext.Equals("json3", StringComparison.OrdinalIgnoreCase)
+                ? ParseJson3(text)
+                : ParseVtt(text);
 
-            if (IsDisposed || Current.Id != id)
+            if (cts.IsCancellationRequested || IsDisposed || Current.Id != videoId)
                 return;
 
             if (cues.Count == 0)
@@ -1739,14 +1877,26 @@ internal sealed class VideoPlayerForm : Form
             subLabel = track.Name;
             lastCue = -1;
 
-            TubeLibrary.Instance.Settings.SubtitleLanguage = track.Language;
-            TubeLibrary.Instance.SaveNow();
+            if (rememberLanguage)
+            {
+                TubeLibrary.Instance.Settings.SubtitleLanguage = track.Language;
+                TubeLibrary.Instance.SaveNow();
+            }
             Say("Subtitles: " + track.Name);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
             Dbg("subtitle download failed: " + ex.Message);
             Say("Couldn't load those subtitles");
+        }
+        finally
+        {
+            if (ReferenceEquals(subtitleDownloadCts, cts))
+                subtitleDownloadCts = null;
+            cts.Dispose();
         }
     }
 
@@ -1784,7 +1934,27 @@ internal sealed class VideoPlayerForm : Form
     }
 
     private static readonly System.Text.RegularExpressions.Regex VttTime = new(
-        @"(?:(\d+):)?(\d\d):(\d\d)\.(\d{3})\s*-->\s*(?:(\d+):)?(\d\d):(\d\d)\.(\d{3})");
+        @"(?<from>(?:\d+:)?\d{2}(?::\d{2})?\.\d{1,3})\s*-->\s*(?<to>(?:\d+:)?\d{2}(?::\d{2})?\.\d{1,3})");
+
+    private static double ParseVttTimestamp(string value)
+    {
+        string[] parts = value.Split(':');
+        double seconds = double.Parse(
+            parts[^1], System.Globalization.CultureInfo.InvariantCulture);
+
+        if (parts.Length == 2)
+        {
+            return double.Parse(
+                       parts[0], System.Globalization.CultureInfo.InvariantCulture) * 60 +
+                   seconds;
+        }
+
+        return double.Parse(
+                   parts[0], System.Globalization.CultureInfo.InvariantCulture) * 3600 +
+               double.Parse(
+                   parts[1], System.Globalization.CultureInfo.InvariantCulture) * 60 +
+               seconds;
+    }
 
     private static List<Cue> ParseVtt(string vtt)
     {
@@ -1798,12 +1968,6 @@ internal sealed class VideoPlayerForm : Form
             if (!m.Success)
                 continue;
 
-            double T(int g) =>
-                (m.Groups[g].Success ? double.Parse(m.Groups[g].Value) * 3600 : 0) +
-                double.Parse(m.Groups[g + 1].Value) * 60 +
-                double.Parse(m.Groups[g + 2].Value) +
-                double.Parse(m.Groups[g + 3].Value) / 1000.0;
-
             List<string> body = new();
 
             for (i++; i < lines.Length && lines[i].Trim().Length > 0; i++)
@@ -1812,7 +1976,12 @@ internal sealed class VideoPlayerForm : Form
             string text = string.Join(" ", body.Where(b => b.Length > 0));
 
             if (text.Length > 0)
-                cues.Add(new Cue(T(1), T(5), System.Net.WebUtility.HtmlDecode(text)));
+            {
+                cues.Add(new Cue(
+                    ParseVttTimestamp(m.Groups["from"].Value),
+                    ParseVttTimestamp(m.Groups["to"].Value),
+                    System.Net.WebUtility.HtmlDecode(text)));
+            }
         }
 
         return Tidy(cues);
@@ -1933,6 +2102,12 @@ internal sealed class VideoPlayerForm : Form
             // Local files are not YouTube history.
             if (!LocalMedia.IsLocalId(Current.Id))
                 TubeLibrary.Instance.RecordWatch(Current);
+        }
+
+        if (!imageMode && !LocalMedia.IsLocalId(Current.Id) &&
+            !string.IsNullOrWhiteSpace(TubeLibrary.Instance.Settings.SubtitleLanguage))
+        {
+            _ = RestorePreferredSubtitlesAsync(Current.Id);
         }
     }
 
@@ -3438,34 +3613,78 @@ internal sealed class VideoPlayerForm : Form
     // FULLSCREEN + KEYS
     // --------------------------------------------------
 
-    private void ToggleFullscreen()
+    private async void ToggleFullscreen()
     {
-        if (!fullscreen)
+        if (fullscreenTransition)
+            return;
+
+        bool resumePlayback = playing && Opened && !imageMode;
+        bool showBarAfterTransition = fullscreen || BarShown;
+        ScreenFadeOverlay fade = new(Screen.FromControl(this).Bounds);
+        fullscreenTransition = true;
+        bool layoutSuspended = false;
+
+        try
         {
-            savedBorder = FormBorderStyle;
-            savedState = WindowState;
-            savedBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            fade.Show(this);
+            fade.BringToFront();
+            await fade.FadeToAsync(1, 180);
 
-            Rectangle screen = Screen.FromControl(this).Bounds;
+            barWindow.Hide();
+            SuspendLayout();
+            layoutSuspended = true;
 
-            FormBorderStyle = FormBorderStyle.None;
-            WindowState = FormWindowState.Normal;
-            Bounds = screen;
+            if (!fullscreen)
+            {
+                savedBorder = FormBorderStyle;
+                savedState = WindowState;
+                savedBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
 
-            fullscreen = true;
+                Rectangle screen = Screen.FromControl(this).Bounds;
+
+                WindowState = FormWindowState.Normal;
+                FormBorderStyle = FormBorderStyle.None;
+                Bounds = screen;
+
+                fullscreen = true;
+                lastMove = Environment.TickCount64;
+            }
+            else
+            {
+                fullscreen = false;
+
+                // Back to how it was: usually the maximized "full windowed" mode.
+                FormBorderStyle = savedBorder;
+                Bounds = savedBounds;
+                WindowState = savedState;
+            }
+
+            ResumeLayout(true);
+            layoutSuspended = false;
+
             UpdateSidebar();
-            lastMove = Environment.TickCount64;
+            PlaceBar();
+            BarShown = showBarAfterTransition;
+
+            Activate();
+            host.Focus();
+            surface.Focus();
+
+            if (resumePlayback && playing && !imageMode)
+                media.Play();
+
+            await Task.Delay(80);
+            await fade.FadeToAsync(0, 200);
         }
-        else
+        finally
         {
-            fullscreen = false;
-            BarShown = true;
-            UpdateSidebar();
+            if (layoutSuspended)
+                ResumeLayout(true);
 
-            // Back to how it was: usually the maximized "full windowed" mode.
-            FormBorderStyle = savedBorder;
-            Bounds = savedBounds;
-            WindowState = savedState;
+            fullscreenTransition = false;
+            if (!fade.IsDisposed)
+                fade.Close();
+            fade.Dispose();
         }
     }
 
@@ -3611,6 +3830,7 @@ internal sealed class VideoPlayerForm : Form
         endTimer.Dispose();
 
         resolveCts?.Cancel();
+        CancelSubtitleDownload();
 
         SaveProgress();
         TubeLibrary.NowPlayingId = null;

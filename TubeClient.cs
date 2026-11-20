@@ -2355,7 +2355,7 @@ internal sealed class TubeClient : Form
         list.AddHeader("Account");
 
         list.AddRow("", () => "Account: " + AccountShort(),
-            "Sign in to get your YouTube recommendations and to look videos up quickly." +
+            "Sign in for your YouTube recommendations and videos that require an account." +
             "\nThe session renews itself, so you stay signed in.", null);
         list.AddRow("", () => "Sign in with Google", "Opens a sign-in window.", _ => SignIn());
         list.AddRow("", () => "Sign out", "Forgets the saved sign-in on this computer.", _ => SignOut());
@@ -2412,6 +2412,10 @@ internal sealed class TubeClient : Form
                 library.Settings.AutoStreamQuality = !library.Settings.AutoStreamQuality;
                 library.SettingsChanged();
             });
+        Toggle("\uE72E", "Use Chrome cookies if streaming fails",
+            () => library.Settings.UseChromeCookiesForStreaming,
+            v => library.Settings.UseChromeCookiesForStreaming = v,
+            "Last resort only: if UtilTube's account and anonymous stream lookups fail, yt-dlp may read Chrome's local cookies for YouTube. Off by default.");
         Cycle("\uE839", "Network limit while I am in another program", new[] { 0, 5, 10, 20, 40 },
             () => library.Settings.UnfocusedLimitMbps, v => library.Settings.UnfocusedLimitMbps = v,
             v => v == 0 ? "no limit" : v + " Mbps",

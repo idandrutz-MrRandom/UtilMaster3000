@@ -98,6 +98,9 @@ internal sealed class TubeSettings
     // Highest resolution to download (H.264 / MP4).
     public int Quality { get; set; } = 720;
 
+    /// <summary>Allow yt-dlp to use Chrome cookies as a last-resort stream fallback.</summary>
+    public bool UseChromeCookiesForStreaming { get; set; }
+
     // How video fills the player: 0 = auto, 1 = fill (crop), 2 = fit (bars).
     public int VideoFit { get; set; }
 
