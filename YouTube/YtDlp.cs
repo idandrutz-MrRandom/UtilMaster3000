@@ -46,7 +46,10 @@ internal static class YtDlp
 
     private static string? cachedPath;
 
-    public static string ToolFolder => Path.Combine(
+    /// <summary>Tests: keep the tools somewhere else (a throw-away folder).</summary>
+    public static string? ToolFolderOverride { get; set; }
+
+    public static string ToolFolder => ToolFolderOverride ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "UtilMaster3000", "tools");
 
@@ -125,11 +128,26 @@ internal static class YtDlp
     /// Downloads yt-dlp.exe from the project's official GitHub release into
     /// the app's tools folder and verifies it against the published SHA-256.
     /// </summary>
-    public static async Task InstallAsync(CancellationToken ct)
+    public static async Task InstallAsync(CancellationToken ct, Action<ToolDownloadProgress>? progress = null)
     {
         Directory.CreateDirectory(ToolFolder);
 
-        byte[] exe = await Http.GetByteArrayAsync(ReleaseBase + "yt-dlp.exe", ct);
+        string download = Path.Combine(ToolFolder, "yt-dlp-download.tmp");
+
+        try
+        {
+            await Downloader.DownloadAsync(ReleaseBase + "yt-dlp.exe", download, progress, ct);
+            await InstallDownloadedAsync(download, ct);
+        }
+        finally
+        {
+            try { File.Delete(download); } catch (IOException) { }
+        }
+    }
+
+    private static async Task InstallDownloadedAsync(string downloaded, CancellationToken ct)
+    {
+        byte[] exe = await File.ReadAllBytesAsync(downloaded, ct);
         string sums = await Http.GetStringAsync(ReleaseBase + "SHA2-256SUMS", ct);
 
         string? expected = sums

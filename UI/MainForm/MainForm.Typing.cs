@@ -12,7 +12,7 @@ namespace UtilMaster3000;
 
 public sealed partial class MainForm
 {
-    private static readonly string[] ModeNames = { "Russian", "Weird text", "Off" };
+    private static readonly string[] ModeNames = { "Letter conversion En -> Ru", "Weird text", "Off" };
 
     private const string WeirdSentence = "The quick brown fox jumps over the lazy dog";
 
@@ -21,7 +21,7 @@ public sealed partial class MainForm
     {
         if (translator.Mode == TypingMode.Off)
         {
-            Toast("The typing converter is off. Turn it on in Setup > Typing mode.", OffColor);
+            Toast("Letter conversion is off. Turn it on in Setup > Typing mode.", OffColor);
             return;
         }
 
@@ -66,7 +66,7 @@ public sealed partial class MainForm
             new MenuEntry(0, "\uE765", modeText,
                 run: () => Step(1), runAlt: () => Step(-1),
                 expandText: modeText + NL +
-                    "Russian: Latin letters become Cyrillic as you type (privet -> привет)." + NL +
+                    "Letter conversion En -> Ru: English letters become Russian letters as you type (privet -> привет)." + NL +
                     "Weird text: your letters are restyled, like random case, other fonts or symbols." + NL +
                     "Off: the converter is disabled completely and no keyboard hook runs." + NL +
                     "Click = next, right-click = previous.")

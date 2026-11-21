@@ -149,6 +149,12 @@ internal sealed class AppSettings
     // (true) instead of stopping the recording (false, the old behaviour).
     public bool MenuWhileRecording { get; set; }
 
+    // The set-up guide opens by itself once, on the very first start.
+    public bool GuideShown { get; set; }
+
+    // The order of the home menu (by row name). Empty = the default order.
+    public List<string> MenuOrder { get; set; } = new();
+
     // Clipboard history: false = left click pastes, right click opens a
     // picture / video in the player. true = the other way round.
     public bool ClipboardLeftOpens { get; set; }

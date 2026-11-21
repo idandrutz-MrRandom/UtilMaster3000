@@ -1131,7 +1131,7 @@ internal static class BackgroundMedia
 
         string ffmpeg = FfmpegRecorder.FindFfmpeg()
             ?? throw new InvalidOperationException(
-                "Video backgrounds need ffmpeg (winget install ffmpeg).");
+                "Video backgrounds need ffmpeg (download it from the Capture page).");
 
         string output = Path.Combine(Folder, "incoming.gif");
         target = Path.Combine(Folder, "background.gif");

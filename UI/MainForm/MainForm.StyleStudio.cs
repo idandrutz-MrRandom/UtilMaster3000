@@ -44,6 +44,7 @@ public sealed partial class MainForm
         breadcrumb.FillColor = Theme.Strong;
         breadcrumb.OutlineColor = Theme.Background;
         breadcrumb.Invalidate();
+        StyleBackButton();
 
         foreach (LauncherRow row in visibleRows)
             row.ApplyAppearance();

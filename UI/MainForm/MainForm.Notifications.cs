@@ -61,9 +61,9 @@ public sealed partial class MainForm
 
         list.Add(Info("Pop-ups"));
 
-        list.Add(NotifyCycle("", "Translator on/off pop-up", new[] { true, false },
+        list.Add(NotifyCycle("", "Letter conversion on/off pop-up", new[] { true, false },
             () => settings.ShowNotification, v => settings.ShowNotification = v, v => OnOff(v),
-            "The pop-up that says TRANSLATOR: ON / OFF.", () => notification.Preview(translator.Enabled)));
+            "The pop-up that says Letter conversion En -> Ru: ON / OFF.", () => notification.Preview(translator.Enabled)));
 
         list.Add(NotifyCycle("", "Small messages (Copied, Saved...)", new[] { true, false },
             () => settings.ShowMessages, v => settings.ShowMessages = v, v => OnOff(v),

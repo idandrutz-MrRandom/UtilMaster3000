@@ -49,6 +49,63 @@ public sealed partial class MainForm
 
     private static bool HasFfmpeg => FfmpegRecorder.FindFfmpeg() != null;
 
+    private bool ffmpegBusy;
+
+    // Offers to download ffmpeg (MP4 recordings, UtilTube downloads, video backgrounds
+    // need it), then does it in the background with progress pop-ups.
+    private async void DownloadFfmpeg()
+    {
+        if (ffmpegBusy)
+        {
+            Toast("ffmpeg is already downloading...");
+            return;
+        }
+
+        if (HasFfmpeg)
+        {
+            Toast("ffmpeg is already installed", OnColor);
+            return;
+        }
+
+        DialogResult answer = MessageBox.Show(
+            "ffmpeg is a free, open-source tool. It is needed for MP4 screen recordings, " +
+            "for joining the video and audio of UtilTube downloads and for video backgrounds.\n\n" +
+            $"Download it now ({FfmpegInstaller.ApproxSize}) from its official build site? " +
+            "The file is checked against its published checksum and only ffmpeg.exe is kept, " +
+            "in this app's own folder.",
+            "Download ffmpeg",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        ffmpegBusy = true;
+        RefreshPage();
+
+        // A bar with the percent, the speed and how long it will take.
+        DownloadBar bar = DownloadBar.Start("Downloading ffmpeg");
+
+        try
+        {
+            await FfmpegInstaller.InstallAsync(bar.Report, CancellationToken.None);
+
+            bar.Finish("ffmpeg is installed: MP4 recording is ready", true);
+        }
+        catch (Exception ex)
+        {
+            bar.Finish("Download failed", false, 4000);
+            Say("Download ffmpeg", "Could not download ffmpeg.\n\n" + ex.Message);
+        }
+        finally
+        {
+            ffmpegBusy = false;
+
+            if (!IsDisposed)
+                RefreshPage();
+        }
+    }
+
     // --------------------------------------------------
     // PRINT SCREEN KEYS
     // --------------------------------------------------
@@ -336,7 +393,7 @@ public sealed partial class MainForm
         Add("Open the launcher", FormatHotkey(launcherKey),
             () => BeginHotkeyBinding(launcherKey));
 
-        Add("Translator on / off", FormatHotkey(toggleKey),
+        Add("Letter conversion En -> Ru on / off", FormatHotkey(toggleKey),
             () => BeginHotkeyBinding(toggleKey));
 
         foreach (ShortcutCatalog.Info info in ShortcutCatalog.All)
@@ -424,11 +481,10 @@ public sealed partial class MainForm
             }
             else
             {
-                list.Add(Act("", "Better recordings: install ffmpeg", () =>
-                    Say("Video recording",
-                        "Without ffmpeg only short GIF recordings are possible.\n\n" +
-                        "For high-quality MP4 recordings of any length, install it with:\n\n" +
-                        "winget install ffmpeg\n\nthen restart UtilMaster3000.")));
+                list.Add(Act("", ffmpegBusy
+                        ? "Downloading ffmpeg..."
+                        : $"Download ffmpeg for MP4 recordings ({FfmpegInstaller.ApproxSize})",
+                    DownloadFfmpeg));
             }
         }
 

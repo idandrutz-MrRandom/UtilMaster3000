@@ -119,6 +119,23 @@ internal sealed class TubeSettings
     /// </summary>
     public bool PauseDownloadsInGames { get; set; } = true;
 
+    // ---- UtilTube's own look (UtilTube -> Settings -> Look) ----
+
+    /// <summary>
+    /// 0 = the launcher's style (the default: UtilTube matches the menu), 1.. = a UtilTube
+    /// palette (see TubeTheme.Presets).
+    /// </summary>
+    public int UtilTubeLook { get; set; }
+
+    /// <summary>Colours picked by hand as "#rrggbb" ("" = from the palette).</summary>
+    public string LookBackground { get; set; } = "";
+    public string LookPanel { get; set; } = "";
+    public string LookText { get; set; } = "";
+    public string LookAccent { get; set; } = "";
+
+    /// <summary>Size of the video thumbnails: 0 small, 1 normal, 2 large.</summary>
+    public int CardSize { get; set; } = 1;
+
     /// <summary>Playlists started from the Playlists page start over after the last video.</summary>
     public bool PlaylistLoop { get; set; }
 
@@ -1128,6 +1145,7 @@ internal sealed class TubeLibrary
     {
         NetworkLimiter.LimitMbps = Settings.UnfocusedLimitMbps;
         NetworkLimiter.PauseInFullscreen = Settings.PauseDownloadsInGames;
+        TubeTheme.Apply(Settings);
 
         Changed();
         EnforceCap();

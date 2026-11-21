@@ -164,13 +164,22 @@ internal sealed class OutlinedLabel : Control
 
 internal sealed class LauncherRow : Control
 {
-    private static Color BackgroundColor => Theme.Background;
+    /// <summary>Rows in UtilTube's settings use UtilTube's own colours, not the launcher's.</summary>
+    public bool UseTubeLook { get; set; }
 
-    private static Color NormalText => Theme.Text;
+    private Color BackgroundColor => UseTubeLook ? TubeTheme.Background : Theme.Background;
 
-    private static Color NumberText => Theme.Number;
+    private Color NormalText => UseTubeLook ? TubeTheme.Text : Theme.Text;
 
-    private static Color ActiveBackground => Theme.ActiveRow;
+    private Color NumberText => UseTubeLook ? TubeTheme.Number : Theme.Number;
+
+    private Color ActiveBackground => UseTubeLook ? TubeTheme.ActiveRow : Theme.ActiveRow;
+
+    private Color StrongText => UseTubeLook ? TubeTheme.Strong : Theme.Strong;
+
+    // The menu's background picture shows through the rows (UtilTube's too, while it follows
+    // the launcher's look and its panels paint the picture).
+    private bool SeeThrough => UseTubeLook ? TubeGlass.Active : Theme.HasBackground;
 
     private string indexText;
     private string iconText;
@@ -481,7 +490,7 @@ internal sealed class LauncherRow : Control
         );
 
         // With a background image the rows are see-through so it shows.
-        BackColor = Theme.HasBackground ? Color.Transparent : BackgroundColor;
+        BackColor = SeeThrough ? Color.Transparent : BackgroundColor;
         Cursor = Cursors.Hand;
 
     }
@@ -502,7 +511,7 @@ internal sealed class LauncherRow : Control
             labelFont = Theme.SharedMenuFont(9f * fontScale);
         }
 
-        BackColor = Theme.HasBackground ? Color.Transparent : BackgroundColor;
+        BackColor = SeeThrough ? Color.Transparent : BackgroundColor;
         Invalidate();
     }
 
@@ -518,18 +527,18 @@ internal sealed class LauncherRow : Control
 
         Color foreground = Lerp(
             background,
-            Lerp(NormalText, Theme.Strong, hover),
+            Lerp(NormalText, StrongText, hover),
             eased
         );
 
         Color numberColor = Lerp(background, NumberText, eased);
 
-        bool customBackground = Theme.DrawAsset(
+        bool customBackground = !UseTubeLook && Theme.DrawAsset(
             e.Graphics,
             "row",
             ClientRectangle);
 
-        if (!customBackground && !Theme.HasBackground)
+        if (!customBackground && !SeeThrough)
         {
             using SolidBrush bg = new(background);
             e.Graphics.FillRectangle(bg, ClientRectangle);
@@ -704,8 +713,8 @@ internal sealed class ModeNotification : Form
 
     public bool Muted { get; set; }
 
-    /// <summary>What the pop-up calls the converter (TRANSLATOR, WEIRD TEXT).</summary>
-    public string Label { get; set; } = "TRANSLATOR";
+    /// <summary>What the pop-up calls the converter (Letter conversion En -> Ru, WEIRD TEXT).</summary>
+    public string Label { get; set; } = "Letter conversion En -> Ru";
 
     /// <summary>The small utility toasts ("Copied...") can be switched off on their own.</summary>
     public bool MessagesEnabled { get; set; } = true;

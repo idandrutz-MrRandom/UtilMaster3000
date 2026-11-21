@@ -52,7 +52,7 @@ public sealed class GlobalTypingTranslator : IDisposable
     {
         TypingMode.Weird => "WEIRD TEXT",
         TypingMode.Off => "TYPING OFF",
-        _ => "TRANSLATOR"
+        _ => "Letter conversion En -> Ru"
     };
 
     public event Action<bool>? EnabledChanged;

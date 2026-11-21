@@ -4,3 +4,5 @@ obj/
 *.user
 UtilMaster3000/
 publish/
+releases/
+make-release.ps1

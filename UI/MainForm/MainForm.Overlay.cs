@@ -93,36 +93,59 @@ public sealed partial class MainForm
                 old.Dispose();
             }
 
+            // A text that merely counts up (seconds, clicks) must not make the window flash:
+            // the see-through level is re-applied only when it really changed, and the window
+            // is resized and moved only when its size or place really changes.
+            bool arrangement = position != shownPosition || scalePercent != shownScale ||
+                               newLines.Count != lines.Count;
+
+            bool opacityChanged = opacityPercent != shownOpacity;
+
             lines = newLines;
             shownPosition = position;
             shownScale = scalePercent;
             shownOpacity = opacityPercent;
 
-            Opacity = Math.Clamp(opacityPercent, 20, 100) / 100.0;
+            if (opacityChanged)
+                Opacity = Math.Clamp(opacityPercent, 20, 100) / 100.0;
 
             double s = Scale;
             Rectangle area = Screen.PrimaryScreen!.WorkingArea;
 
             int width = lines.Max(l => TextRenderer.MeasureText(l.Text, font).Width) + (int)(56 * s);
-            Size = new Size(Math.Min(width, area.Width - 40), (int)(lines.Count * 30 * s) + (int)(14 * s));
+
+            // Wider in steps and never narrower while the same lines are up (a counter going
+            // from 99 to 100 would otherwise resize it every time the digits change).
+            width = (width + 23) / 24 * 24;
+
+            if (!arrangement)
+                width = Math.Max(width, Width);
+
+            Size size = new(
+                Math.Min(width, area.Width - 40),
+                (int)(lines.Count * 30 * s) + (int)(14 * s));
 
             const int margin = 12;
 
             int x = position switch
             {
                 NotificationPosition.BottomLeft or NotificationPosition.TopLeft => area.Left + margin,
-                NotificationPosition.BottomRight or NotificationPosition.TopRight => area.Right - Width - margin,
-                _ => area.Left + (area.Width - Width) / 2
+                NotificationPosition.BottomRight or NotificationPosition.TopRight => area.Right - size.Width - margin,
+                _ => area.Left + (area.Width - size.Width) / 2
             };
 
             int y = position switch
             {
                 NotificationPosition.TopCenter or NotificationPosition.TopLeft or NotificationPosition.TopRight
                     => area.Top + margin,
-                _ => area.Bottom - Height - 60
+                _ => area.Bottom - size.Height - 60
             };
 
-            Location = new Point(x, y);
+            Point place = new(x, y);
+
+            if (Bounds.Size != size || Location != place)
+                SetBounds(place.X, place.Y, size.Width, size.Height);
+
             Invalidate();
         }
 

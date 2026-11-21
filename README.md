@@ -1,6 +1,6 @@
 # UtilMaster3000
 
-A lightweight, offline Windows launcher (WinForms + WPF, .NET 8) that lives in the tray. It combines an app/file/window launcher, a live typing converter, screenshots and screen recording, a macro recorder, an autoclicker, a password vault, a clipboard history, an offline YouTube client (UtilTube) and a lot of small everyday tools, all behind one customizable menu.
+A lightweight, offline Windows launcher (WinForms + WPF, .NET 8) that lives in the tray. It combines an app/file/window launcher, letter conversion En -> Ru, screenshots and screen recording, a macro recorder, an autoclicker, a password vault, a clipboard history, an offline YouTube client (UtilTube) and a lot of small everyday tools, all behind one customizable menu.
 
 ## Run it
 
@@ -18,12 +18,13 @@ Settings live in `%APPDATA%\UtilMaster3000\settings.json` (Setup → About → *
 **Requirements.** Windows 10/11 and the .NET 8 runtime (the SDK if you build it yourself). UtilTube sign-in uses the WebView2 runtime, which is included with Windows 11 and up-to-date Windows 10.
 
 **Optional helpers.**
-- **ffmpeg** gives MP4 screen recordings of any length. Without it only short GIF recordings (30 s max) are possible.
+- **ffmpeg** gives MP4 screen recordings of any length and joins video and audio in UtilTube downloads. The app can download it for you (about 200 MB, checked against its published checksum, kept in `%APPDATA%\UtilMaster3000\tools`): use **Capture → Download ffmpeg**, the set-up guide, or UtilTube → Settings. Without it only short GIF recordings (30 s max) are possible.
 - **yt-dlp** powers UtilTube. It is found on your `PATH` or downloaded from the project's official GitHub release into `%APPDATA%\UtilMaster3000\tools`.
 
-**Keyboard hooks and antivirus.** The launcher registers global hotkeys and a global keyboard hook (Print Screen keys, macros, and the typing converter). Some antivirus tools flag this kind of program. The hook for the typing converter is removed completely when **Setup → Typing mode** is **Off**.
+**Keyboard hooks and antivirus.** The launcher registers global hotkeys and a global keyboard hook (Print Screen keys, macros, and letter conversion). Some antivirus tools flag this kind of program. The hook for letter conversion is removed completely when **Setup → Typing mode** is **Off**.
 
-**Typing converter.** It rewrites what you type in every application, in the Russian or Weird-text mode. If text suddenly looks wrong, press `Ctrl + Alt + R` or set Typing mode to Off.
+**Letter conversion En -> Ru.** It rewrites what you type in every application (or restyles it, in Weird text mode). If text suddenly looks wrong, press `Ctrl + Alt + R` or set Typing mode to Off.
+
 **Vault.** The master password is never stored and cannot be recovered. If you forget it, the vault cannot be opened. Keep a backup of `vault.dat` if the passwords matter.
 
 **Your data stays on your PC.** There is no account or sign-up of its own. Network use is what you ask for: web search, UtilTube, link downloads, and fetching yt-dlp. The Google sign-in for UtilTube happens on Google's own page; only session cookies are kept, encrypted for your Windows user, and **Sign out** deletes them.
@@ -43,7 +44,7 @@ Settings live in `%APPDATA%\UtilMaster3000\settings.json` (Setup → About → *
 | What | Default key |
 | --- | --- |
 | Open / close the launcher | `Ctrl + Alt + U` |
-| Typing converter on / off | `Ctrl + Alt + R` (hold it, 450 ms by default, to open the menu without toggling; the hold time is in Setup) |
+| Letter conversion En -> Ru on / off | `Ctrl + Alt + R` (hold it, 450 ms by default, to open the menu without toggling; the hold time is in Setup) |
 | Tray icon | Double-click it to open the launcher (right-click for its menu) |
 
 All shortcuts can be changed in **Setup → Shortcuts...** (or **Capture → Change shortcuts...**).
@@ -59,7 +60,8 @@ All shortcuts can be changed in **Setup → Shortcuts...** (or **Capture → Cha
 | Click | Run the row |
 | Right-click | Alternative action where a row has one (for example clipboard items: paste vs. open in the player) |
 | Just type | Search from the home page; on other pages it filters that page |
-| **Back** row | Returns to the previous page |
+| **‹ Back** button (top right of every page but home), the **Back** row, or the mouse's back button | Returns to the previous page |
+| Search on the home page, or open **Functions** | Finds any action or setting by name, for example `screenshot`, `dark mode`, `slide`, `ffmpeg`, `hotkey` |
 | Hover a row with long text | It unfolds to show the rest (delay is adjustable) |
 | Hover a row that opens a menu | A menu slides out beside the launcher (optional, see Setup) |
 
@@ -67,7 +69,9 @@ All shortcuts can be changed in **Setup → Shortcuts...** (or **Capture → Cha
 
 The home page lists the main sections:
 
-**Apps · Find · Capture · Tools · Text · Clipboard · Vault · Windows · Learn · Style · Setup · About · System**
+**Set-up guide · Functions · Modules · Apps · Find · Capture · Tools · Text · Clipboard · Vault · Windows · Learn · Style · Setup · About · System**
+
+New here? Start with **Set-up guide** (it also opens by itself the first time you run the app). It walks through the shortcuts, letter conversion, the look, slide-out menus, screenshots and recording, downloading ffmpeg, UtilTube, the clipboard, the vault and starting with Windows. Click a step to do it, rest on it to read more.
 
 ### Search from the home page
 
@@ -82,9 +86,12 @@ Start typing and you get mixed results:
 | `github.com` | Opens the website |
 | `youtube cats` | Searches UtilTube; a pasted YouTube link offers to save it for offline viewing |
 | A link to a supported site | Offers *Download this link and copy the file* |
-| Any word | Matching sections, tools, open windows, files, and a web search (engine is selectable in Setup) |
+| Any word | Matching sections, tools, **functions** (any action or setting, shown as `Page > Name`), open windows, files, and a web search (engine is selectable in Setup) |
 
 ## Sections
+
+### Functions
+Searches every action and setting in the launcher from one page. Type `dark`, `screenshot`, `slide-out` or `hotkey` and pick the result to do it right there, or click a page result to open it. Names match first; descriptions match after that.
 
 ### Apps
 Your recently launched apps; type to search every installed app.
@@ -112,7 +119,7 @@ Screenshots and screen recording (default keys in brackets).
 
 ### Text
 Works on the clipboard text or on what you type:
-Latin ⇄ Russian, UPPERCASE, lowercase, Title Case, plain text, tidy whitespace, remove line breaks, sort lines, remove duplicate lines, reverse, Base64 encode/decode, URL encode/decode, JSON prettify/minify, word and character count. `Enter` copies the result; another row pastes it into the window you came from.
+Letter conversion En -> Ru and Ru -> En, UPPERCASE, lowercase, Title Case, plain text, tidy whitespace, remove line breaks, sort lines, remove duplicate lines, reverse, Base64 encode/decode, URL encode/decode, JSON prettify/minify, word and character count. `Enter` copies the result; another row pastes it into the window you came from.
 
 ### Clipboard
 History of copied text, pictures and files (`Win + V` opens it by default; you can turn that off on this page). Click to paste; right-click opens pictures and videos in the built-in player (can be swapped). You can pause history recording and clear it.
@@ -127,7 +134,7 @@ An encrypted password vault (AES-256-GCM, PBKDF2 key from your master password, 
 Shortcuts to Settings, Task Manager, Control Panel, Device Manager, Services, Disk Management, Environment variables, Terminal, Calculator, Notepad, Snipping tool, plus toggles for dark mode, file extensions and hidden files, and *Empty Recycle Bin* (asks first).
 
 ### Learn
-Short explanations: how it works, examples, using the typing converter, search tips, the Russian alphabet mapping.
+Short explanations: how it works, examples, using letter conversion En -> Ru, search tips, the alphabet mapping.
 
 ### Style
 Everything about the look. The fastest way is **Style editor...**, one window with theme tiles, live colour pickers (the menu updates while you drag), sliders for sizes, animation and slide-out delays, and the background picture.
@@ -145,11 +152,41 @@ The same options are also available as lists:
 
 ### Setup
 - Shortcuts and *hold to open menu*
-- **Typing mode:** Russian (Latin → Cyrillic as you type), **Weird text** (16 styles: random case, alternating case, bold, italic, script, gothic, double-struck, monospace, circled, wide, small caps, leet, look-alike symbols, chaos...) or **Off** (removes the keyboard hook entirely)
-- Live conversion on/off
+- **Typing mode:** **Letter conversion En -> Ru** (English letters become Russian as you type), **Weird text** (16 styles: random case, alternating case, bold, italic, script, gothic, double-struck, monospace, circled, wide, small caps, leet, look-alike symbols, chaos...) or **Off** (removes the keyboard hook entirely)
+- **Re-order the main menu:** opens a window where you drag the menu's rows up and down; the others slide out of the way and the menu has the new order as soon as you let go. The order is saved. *Back to the default order* undoes it
+- Letter conversion on/off
 - Hide on focus loss
 - **Slide-out menus on hover:** on/off, delay, side (automatic / right / left), position (level with the hovered row / launcher top), and the delay before long text unfolds
 - Start with Windows · Web search engine · Reset settings
+
+### Modules
+Add your own entries to the launcher without any programming. A **module** is a small `.json` file in `%APPDATA%\UtilMaster3000\modules` (a folder containing `module.json`, or a loose `.json` file). Open **Modules** on the home page. **See module template** opens a fully commented template in Notepad (every field and type explained: copy it into the modules folder, rename it and edit it). **Create an example module** writes a small working one instead. After editing, choose **Reload modules**.
+
+Each entry has a `label` and a `type`:
+
+| Type | Does |
+| --- | --- |
+| `open` / `url` | Opens a folder, file, website or program (`target`, optional `args`) |
+| `command` | Runs a command in a console (`target`; `keep: true` leaves the window open, `hidden: true` hides it) |
+| `script` | Runs a PowerShell file that sits next to the module (`target`, optional `args`) |
+| `copy` | Puts `text` on the clipboard |
+| `paste` | Types `text` into the window you came from |
+| `message` | Shows `text` in a box |
+
+Inside `target`, `args` and `text` you can use `{clipboard}`, `{clipboard-url}` (the clipboard, ready for a web address), `{date}`, `{time}`, `{folder}` (the module's folder) and `%ENVIRONMENT%` variables. `info` shows when you rest on a row and `icon` sets its glyph. Your entries also show up in the home search and in **Functions**.
+
+```json
+{
+  "name": "My tools",
+  "items": [
+    { "label": "Open my projects", "type": "open", "target": "C:\\Projects" },
+    { "label": "Search the clipboard", "type": "url", "target": "https://www.google.com/search?q={clipboard-url}" },
+    { "label": "Git status", "type": "command", "target": "git status", "folder": "C:\\Projects", "keep": true }
+  ]
+}
+```
+
+A module that cannot be read still appears, with the reason. Modules run what their author wrote, so only add ones you trust.
 
 ### About
 Version and build info, *Open settings folder*.
@@ -165,7 +202,9 @@ An offline-friendly YouTube client built on yt-dlp. Open it from **Tools → Uti
 - **Subscriptions:** newest videos from channels you follow
 - **Saved videos:** everything stored on the PC, watchable with no internet (filter by unwatched / in progress / watched, sort by newest, oldest, title, length)
 - **History**, **Watch later** (no account needed), **Playlists**, **Downloads**, **Sources** (channels, playlists and topics kept up to date), **Settings**
+- **Its look:** by default UtilTube matches the launcher: the same theme colours, border frame, font and background picture (shown behind the panels), with its own themed title bar and scroll bars. In **Settings → Look** you can give it colours of its own instead: pick a look (*Same as the launcher*, Dark, Midnight, Deep purple, Forest, Warm, Black, Light), pick the accent, background, panel and text colours yourself, and choose the video size (small / normal / large). It updates while you change it, and the video player follows it too.
 - Click a video to watch immediately; the newest recommended and subscribed videos are saved in the background
+- When UtilTube needs yt-dlp or ffmpeg it asks first, then shows a **download bar** with the percent, the speed and how long is left
 
 Video files you open with "Open with UtilMaster3000" start only the built-in video player, with no launcher.
 

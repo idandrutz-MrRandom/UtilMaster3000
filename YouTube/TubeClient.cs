@@ -64,8 +64,11 @@ internal sealed class TubeClient : Form
 
     private readonly TubeLibrary library = TubeLibrary.Instance;
 
+    // title bar (drawn here: the window has no system one)
+    private readonly TubeTitleBar titleBar;
+
     // top bar
-    private readonly Panel top = new();
+    private readonly GlassPanel top = new();
     private readonly Button menuButton = new();
     private readonly Button backButton = new();
     private readonly Button forwardButton = new();
@@ -76,19 +79,19 @@ internal sealed class TubeClient : Form
 
     // sidebar + content
     private readonly SideBar sidebar = new();
-    private readonly Panel content = new();
-    private readonly Panel header = new();
+    private readonly GlassPanel content = new();
+    private readonly GlassPanel header = new();
     private readonly Label titleLabel = new();
     private readonly Label subtitleLabel = new();
     private readonly FlowLayoutPanel actions = new();
-    private readonly Panel body = new();
+    private readonly GlassPanel body = new();
 
     private readonly VideoGrid grid = new();
     private readonly Label empty = new();
     private readonly Button emptyAction = new();
-    private readonly Panel sourcesView = new();
+    private readonly GlassPanel sourcesView = new();
     private readonly ListBox sourceList = new();
-    private readonly Panel settingsView = new();
+    private readonly GlassPanel settingsView = new();
 
     private readonly Panel statusBar = new();
     private readonly Label statusLeft = new();
@@ -147,18 +150,27 @@ internal sealed class TubeClient : Form
 
     private TubeClient()
     {
+        titleBar = new TubeTitleBar(this, "UtilTube");
+
         Text = "UtilTube";
         ClientSize = new Size(1240, 760);
         MinimumSize = new Size(900, 560);
         StartPosition = FormStartPosition.CenterScreen;
 
-        // "Full windowed": fills the screen but keeps the title bar and
-        // taskbar. The size above is what "Restore" goes back to.
+        // Like the menu: no system title bar, a frame in the menu's border colour and
+        // thickness, and a title bar of its own (see TubeChrome.cs).
+        FormBorderStyle = FormBorderStyle.None;
+
+        // "Full windowed": fills the screen but keeps the taskbar visible. The size above
+        // is what "Restore" goes back to.
+        MaximizedBounds = Screen.FromPoint(Cursor.Position).WorkingArea;
         WindowState = FormWindowState.Maximized;
 
-        BackColor = Theme.Background;
-        ForeColor = Theme.Strong;
-        Font = new Font("Segoe UI", 9.5f);
+        // The form's own colour shows in the padding all round: that is the frame.
+        BackColor = TubeTheme.FrameColor;
+        Padding = new Padding(TubeTheme.FrameWidth);
+        ForeColor = TubeTheme.Strong;
+        Font = TubeTheme.Font(9.5f);
         DoubleBuffered = true;
         KeyPreview = true;
 
@@ -171,9 +183,14 @@ internal sealed class TubeClient : Form
         Controls.Add(sidebar);
         Controls.Add(top);
         Controls.Add(statusBar);
+        Controls.Add(titleBar);
 
         timer.Tick += (_, _) => OnTimer();
         timer.Start();
+
+        // UtilTube's own look: follow it when it is changed in Settings.
+        TubeTheme.Changed += OnLookChanged;
+        FormClosed += (_, _) => TubeTheme.Changed -= OnLookChanged;
 
         // Make sure background downloading is running.
         library.Start();
@@ -184,6 +201,114 @@ internal sealed class TubeClient : Form
             : View.Library);
 
         UpdateAccountButton();
+
+        // Buttons light up in UtilTube's colours when the pointer is over them.
+        TubeTheme.StyleHoverTree(this);
+    }
+
+    // (No WS_EX_COMPOSITED here: it repaints every control in the window, header buttons
+    // included, whenever any part of it changes, which made things flash when the pointer
+    // moved over the videos. The panels and the grid double-buffer themselves.)
+
+    // The frame is the form's padding: none while maximised.
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+
+        Padding = WindowState == FormWindowState.Maximized
+            ? Padding.Empty
+            : new Padding(TubeTheme.FrameWidth);
+
+        titleBar?.Invalidate();
+    }
+
+    // No system frame: the edges and corners of the window still resize it.
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_NCHITTEST = 0x0084;
+
+        if (m.Msg != WM_NCHITTEST || WindowState != FormWindowState.Normal)
+        {
+            base.WndProc(ref m);
+            return;
+        }
+
+        base.WndProc(ref m);
+
+        if ((int)m.Result != 1 /* HTCLIENT */)
+            return;
+
+        long lp = (long)m.LParam;
+        Point p = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+
+        int grip = Math.Max(Padding.Left, 6);
+        bool left = p.X < grip, right = p.X >= Width - grip;
+        bool topEdge = p.Y < grip, bottom = p.Y >= Height - grip;
+
+        if (topEdge && left) m.Result = (IntPtr)13;
+        else if (topEdge && right) m.Result = (IntPtr)14;
+        else if (bottom && left) m.Result = (IntPtr)16;
+        else if (bottom && right) m.Result = (IntPtr)17;
+        else if (left) m.Result = (IntPtr)10;
+        else if (right) m.Result = (IntPtr)11;
+        else if (topEdge) m.Result = (IntPtr)12;
+        else if (bottom) m.Result = (IntPtr)15;
+    }
+
+    // The look changed (preset, colours, video size): recolour what was coloured when it
+    // was built; everything drawn on demand picks the new colours up by itself.
+    private void OnLookChanged(List<(Color Old, Color New)> map)
+    {
+        if (IsDisposed)
+            return;
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => OnLookChanged(map)));
+            return;
+        }
+
+        SuspendLayout();
+
+        BackColor = TubeTheme.FrameColor;
+        Padding = new Padding(TubeTheme.FrameWidth);
+        ForeColor = TubeTheme.Strong;
+
+        foreach (Control child in Controls)
+            Recolour(child, map);
+
+        TubeTheme.StyleHoverTree(this);
+        titleBar.Invalidate();
+
+        grid.RefreshLayout();
+        ResumeLayout(true);
+        Invalidate(true);
+
+        settingsList?.RefreshTexts();
+    }
+
+    private static void Recolour(Control control, List<(Color Old, Color New)> map)
+    {
+        foreach ((Color old, Color now) in map)
+        {
+            if (control.BackColor.ToArgb() == old.ToArgb())
+            {
+                control.BackColor = now;
+                break;
+            }
+        }
+
+        foreach ((Color old, Color now) in map)
+        {
+            if (control.ForeColor.ToArgb() == old.ToArgb())
+            {
+                control.ForeColor = now;
+                break;
+            }
+        }
+
+        foreach (Control child in control.Controls)
+            Recolour(child, map);
     }
 
     // --------------------------------------------------
@@ -197,8 +322,8 @@ internal sealed class TubeClient : Form
             Text = glyph,
             Font = new Font("Segoe MDL2 Assets", size),
             FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Background,
-            ForeColor = Theme.Strong,
+            BackColor = TubeGlass.Surface,
+            ForeColor = TubeTheme.Strong,
             Size = new Size(38, 36),
             Cursor = Cursors.Hand,
             TabStop = false
@@ -213,7 +338,7 @@ internal sealed class TubeClient : Form
     {
         top.Dock = DockStyle.Top;
         top.Height = 58;
-        top.BackColor = Theme.Background;
+        top.BackColor = TubeTheme.Background;
 
         menuButton.Text = "";
         StyleIcon(menuButton, "Show / hide the menu");
@@ -228,16 +353,18 @@ internal sealed class TubeClient : Form
         forwardButton.Click += (_, _) => GoForward();
 
         brand.Text = "UtilTube";
-        brand.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
-        brand.ForeColor = Theme.Accent;
+        brand.Font = TubeTheme.Font(13f, FontStyle.Bold);
+        brand.ForeColor = TubeTheme.Accent;
+        brand.BackColor = Color.Transparent;
         brand.AutoSize = true;
 
-        searchBox.BackColor = Theme.Search;
-        searchBox.ForeColor = Theme.Strong;
-        searchBox.BorderStyle = BorderStyle.FixedSingle;
-        searchBox.Font = new Font("Segoe UI", 11f);
+        searchBox.BackColor = TubeTheme.Search;
+        searchBox.ForeColor = TubeTheme.Strong;
+        searchBox.Font = TubeTheme.Font(11f);
         searchBox.PlaceholderText = "Search YouTube, filter your lists, or paste a link";
-        searchBox.Size = new Size(420, 30);
+
+        // The box sits centred in a field of its own, the same height as the buttons beside it.
+        searchHost = new SearchField(searchBox) { Height = BarHeight, BackColor = TubeTheme.Search };
 
         // In Saved videos / History / Watch later, typing filters live.
         searchBox.TextChanged += (_, _) =>
@@ -264,16 +391,16 @@ internal sealed class TubeClient : Form
         searchButton.Text = "";
         searchButton.Font = new Font("Segoe MDL2 Assets", 12f);
         searchButton.FlatStyle = FlatStyle.Flat;
-        searchButton.BackColor = Theme.ActiveRow;
-        searchButton.ForeColor = Theme.Strong;
-        searchButton.Size = new Size(52, 30);
+        searchButton.BackColor = TubeTheme.ActiveRow;
+        searchButton.ForeColor = TubeTheme.Strong;
+        searchButton.Size = new Size(52, BarHeight);
         searchButton.Cursor = Cursors.Hand;
         searchButton.TabStop = false;
         searchButton.FlatAppearance.BorderSize = 0;
         searchButton.Click += (_, _) => BeginSearch(searchBox.Text);
 
         accountButton.FlatStyle = FlatStyle.Flat;
-        accountButton.Size = new Size(120, 32);
+        accountButton.Size = new Size(120, BarHeight);
         accountButton.Cursor = Cursors.Hand;
         accountButton.TabStop = false;
         accountButton.FlatAppearance.BorderSize = 0;
@@ -282,7 +409,7 @@ internal sealed class TubeClient : Form
         top.Controls.AddRange(new Control[]
         {
             menuButton, backButton, forwardButton, brand,
-            searchBox, searchButton, accountButton
+            searchHost, searchButton, accountButton
         });
 
         top.Resize += (_, _) => LayoutTop();
@@ -293,8 +420,8 @@ internal sealed class TubeClient : Form
     {
         b.Font = new Font("Segoe MDL2 Assets", 13f);
         b.FlatStyle = FlatStyle.Flat;
-        b.BackColor = Theme.Background;
-        b.ForeColor = Theme.Strong;
+        b.BackColor = TubeGlass.Surface;
+        b.ForeColor = TubeTheme.Strong;
         b.Size = new Size(38, 36);
         b.Cursor = Cursors.Hand;
         b.TabStop = false;
@@ -302,22 +429,34 @@ internal sealed class TubeClient : Form
         new ToolTip().SetToolTip(b, tip);
     }
 
+    // Everything in the top bar shares one centre line, and the menu button's icon sits
+    // straight above the sidebar's icons (their centre is 34 px in).
+    private const int BarHeight = 32;
+
+    private SearchField searchHost = null!;
+
     private void LayoutTop()
     {
-        menuButton.Location = new Point(10, 11);
-        backButton.Location = new Point(52, 11);
-        forwardButton.Location = new Point(92, 11);
-        brand.Location = new Point(140, 15);
+        int middle = top.Height / 2;
 
-        accountButton.Location = new Point(top.Width - accountButton.Width - 14, 13);
+        int Centred(Control c) => middle - c.Height / 2;
 
-        int left = 250;
+        menuButton.Location = new Point(34 - menuButton.Width / 2, Centred(menuButton));
+        backButton.Location = new Point(menuButton.Right + 4, Centred(backButton));
+        forwardButton.Location = new Point(backButton.Right + 2, Centred(forwardButton));
+        brand.Location = new Point(forwardButton.Right + 14, Centred(brand));
+
+        accountButton.Location = new Point(top.Width - accountButton.Width - 16, middle - BarHeight / 2);
+
+        int left = brand.Right + 20;
         int available = accountButton.Left - 16 - left;
         int width = Math.Clamp(available - 56, 200, 640);
 
-        // Centre the search box in the free space, like YouTube.
-        searchBox.SetBounds(left + (available - width - 52) / 2, 14, width, 30);
-        searchButton.Location = new Point(searchBox.Right + 2, 14);
+        // The field and its button are one piece (no gap), centred in the free space.
+        int x = left + (available - width - searchButton.Width) / 2;
+
+        searchHost.SetBounds(x, middle - BarHeight / 2, width, BarHeight);
+        searchButton.SetBounds(searchHost.Right, middle - BarHeight / 2, searchButton.Width, BarHeight);
     }
 
     private void ToggleSidebar()
@@ -386,30 +525,32 @@ internal sealed class TubeClient : Form
     private void BuildContent()
     {
         content.Dock = DockStyle.Fill;
-        content.BackColor = Theme.Background;
+        content.BackColor = TubeTheme.Background;
 
         // ---- header ----
         header.Dock = DockStyle.Top;
         header.Height = 70;
-        header.BackColor = Theme.Background;
+        header.BackColor = TubeTheme.Background;
 
-        titleLabel.Font = new Font("Segoe UI", 17f, FontStyle.Bold);
-        titleLabel.ForeColor = Theme.Strong;
+        titleLabel.Font = TubeTheme.Font(17f, FontStyle.Bold);
+        titleLabel.ForeColor = TubeTheme.Strong;
+        titleLabel.BackColor = Color.Transparent;
         titleLabel.AutoSize = false;
-        titleLabel.Location = new Point(22, 8);
+        titleLabel.Location = new Point(34, 8);
         titleLabel.Size = new Size(600, 34);
 
-        subtitleLabel.ForeColor = Theme.Text;
+        subtitleLabel.ForeColor = TubeTheme.Text;
+        subtitleLabel.BackColor = Color.Transparent;
         subtitleLabel.AutoSize = false;
-        subtitleLabel.Location = new Point(24, 42);
+        subtitleLabel.Location = new Point(34, 42);
         subtitleLabel.Size = new Size(600, 22);
 
         actions.FlowDirection = FlowDirection.RightToLeft;
         actions.WrapContents = false;
         actions.Dock = DockStyle.Right;
-        actions.Width = 640;
-        actions.Padding = new Padding(0, 16, 14, 0);
-        actions.BackColor = Theme.Background;
+        actions.Width = 820;
+        actions.Padding = new Padding(0, 20, 16, 0);
+        actions.BackColor = Color.Transparent;
 
         header.Controls.Add(actions);
         header.Controls.Add(titleLabel);
@@ -417,7 +558,7 @@ internal sealed class TubeClient : Form
 
         // ---- body ----
         body.Dock = DockStyle.Fill;
-        body.BackColor = Theme.Background;
+        body.BackColor = TubeTheme.Background;
 
         grid.Dock = DockStyle.Fill;
         grid.ItemActivated += (_, _) => ActivateSelected();
@@ -429,14 +570,15 @@ internal sealed class TubeClient : Form
         empty.AutoSize = false;
         empty.Dock = DockStyle.Fill;
         empty.TextAlign = ContentAlignment.MiddleCenter;
-        empty.ForeColor = Theme.Text;
-        empty.Font = new Font("Segoe UI", 11.5f);
+        empty.ForeColor = TubeTheme.Text;
+        empty.BackColor = Color.Transparent;
+        empty.Font = TubeTheme.Font(11.5f);
 
         emptyAction.Text = "Sign in with Google";
         emptyAction.FlatStyle = FlatStyle.Flat;
-        emptyAction.BackColor = Theme.Accent;
-        emptyAction.ForeColor = Theme.Background;
-        emptyAction.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
+        emptyAction.BackColor = TubeTheme.Accent;
+        emptyAction.ForeColor = TubeTheme.Background;
+        emptyAction.Font = TubeTheme.Font(11f, FontStyle.Bold);
         emptyAction.Size = new Size(230, 46);
         emptyAction.Cursor = Cursors.Hand;
         emptyAction.FlatAppearance.BorderSize = 0;
@@ -467,19 +609,19 @@ internal sealed class TubeClient : Form
     {
         statusBar.Dock = DockStyle.Bottom;
         statusBar.Height = 30;
-        statusBar.BackColor = Theme.Search;
+        statusBar.BackColor = TubeTheme.Search;
 
         statusLeft.Dock = DockStyle.Fill;
         statusLeft.TextAlign = ContentAlignment.MiddleLeft;
         statusLeft.Padding = new Padding(14, 0, 0, 0);
-        statusLeft.ForeColor = Theme.Text;
+        statusLeft.ForeColor = TubeTheme.Text;
 
         statusRight.Dock = DockStyle.Right;
         statusRight.AutoSize = false;
         statusRight.Width = 300;
         statusRight.TextAlign = ContentAlignment.MiddleRight;
         statusRight.Padding = new Padding(0, 0, 14, 0);
-        statusRight.ForeColor = Theme.Text;
+        statusRight.ForeColor = TubeTheme.Text;
 
         statusBar.Controls.Add(statusLeft);
         statusBar.Controls.Add(statusRight);
@@ -497,8 +639,8 @@ internal sealed class TubeClient : Form
             MinimumSize = new Size(0, 32),
             Padding = new Padding(10, 0, 10, 0),
             FlatStyle = FlatStyle.Flat,
-            BackColor = accent || active ? Theme.Accent : Theme.Search,
-            ForeColor = accent || active ? Theme.Background : Theme.Strong,
+            BackColor = accent || active ? TubeTheme.Accent : TubeTheme.Search,
+            ForeColor = accent || active ? TubeTheme.Background : TubeTheme.Strong,
             Cursor = Cursors.Hand,
             TabStop = false,
             Margin = new Padding(6, 0, 0, 0)
@@ -506,6 +648,7 @@ internal sealed class TubeClient : Form
 
         b.FlatAppearance.BorderSize = 0;
         b.Click += (_, _) => click();
+        TubeTheme.StyleHover(b);
         return b;
     }
 
@@ -1123,33 +1266,64 @@ internal sealed class TubeClient : Form
                 return false;
 
             SetMessage("Downloading yt-dlp...", 120);
+            DownloadBar toolBar = DownloadBar.Start("Downloading yt-dlp");
 
             try
             {
-                await YtDlp.InstallAsync(CancellationToken.None);
+                await YtDlp.InstallAsync(CancellationToken.None, toolBar.Report);
+                toolBar.Finish("yt-dlp is installed", true);
                 SetMessage("yt-dlp installed.", 5);
             }
             catch (Exception ex)
             {
+                toolBar.Finish("Download failed", false, 4000);
                 SetMessage("Could not install yt-dlp: " + ex.Message, 15);
                 return false;
             }
         }
 
-        if (FfmpegRecorder.FindFfmpeg() == null)
-        {
-            MessageBox.Show(
-                this,
-                "ffmpeg is needed to join the video and audio of a download.\n\n" +
-                "Install it with:\n\nwinget install ffmpeg\n\nthen reopen UtilTube.",
-                "UtilTube",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-
+        if (FfmpegRecorder.FindFfmpeg() == null && !await DownloadFfmpegAsync())
             return false;
-        }
 
         return true;
+    }
+
+    // Offers ffmpeg (joins the video and audio of a download) and downloads it with
+    // progress in the status line. True once it is there.
+    private async Task<bool> DownloadFfmpegAsync()
+    {
+        if (FfmpegRecorder.FindFfmpeg() != null)
+            return true;
+
+        DialogResult get = MessageBox.Show(
+            this,
+            "ffmpeg is needed to join the video and audio of a download.\n\n" +
+            $"Download it now ({FfmpegInstaller.ApproxSize}) from its official build site? " +
+            "It is checked against its published checksum and kept in this app's own folder.",
+            "UtilTube",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (get != DialogResult.Yes)
+            return false;
+
+        SetMessage("Downloading ffmpeg...", 600);
+        DownloadBar bar = DownloadBar.Start("Downloading ffmpeg");
+
+        try
+        {
+            await FfmpegInstaller.InstallAsync(bar.Report, CancellationToken.None);
+
+            bar.Finish("ffmpeg is installed", true);
+            SetMessage("ffmpeg installed.", 5);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            bar.Finish("Download failed", false, 4000);
+            SetMessage("Could not download ffmpeg: " + ex.Message, 15);
+            return false;
+        }
     }
 
     // --------------------------------------------------
@@ -1164,9 +1338,10 @@ internal sealed class TubeClient : Form
         accountButton.Font = new Font("Segoe MDL2 Assets", 9f);
         accountButton.UseCompatibleTextRendering = false;
         accountButton.Text = signedIn ? "Account" : "Sign in";
-        accountButton.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        accountButton.BackColor = signedIn ? Theme.Search : Theme.Accent;
-        accountButton.ForeColor = signedIn ? Theme.On : Theme.Background;
+        accountButton.Font = TubeTheme.Font(9.5f, FontStyle.Bold);
+        accountButton.BackColor = signedIn ? TubeTheme.Search : TubeTheme.Accent;
+        accountButton.ForeColor = signedIn ? TubeTheme.On : TubeTheme.Background;
+        TubeTheme.StyleHover(accountButton);
     }
 
     private void AccountClicked()
@@ -1749,22 +1924,22 @@ internal sealed class TubeClient : Form
         bool on = library.Settings.PlaylistLoop;
 
         playlistLoop.Text = "Loop: " + (on ? "On" : "Off");
-        playlistLoop.BackColor = on ? Theme.Accent : Theme.Search;
-        playlistLoop.ForeColor = on ? Theme.Background : Theme.Strong;
+        playlistLoop.BackColor = on ? TubeTheme.Accent : TubeTheme.Search;
+        playlistLoop.ForeColor = on ? TubeTheme.Background : TubeTheme.Strong;
     }
 
     private void BuildPlaylistBar()
     {
         playlistBar.Dock = DockStyle.Top;
         playlistBar.Height = 94;
-        playlistBar.BackColor = Theme.Background;
+        playlistBar.BackColor = TubeTheme.Background;
         playlistBar.Visible = false;
 
         // ---- row 1: a link, and what to do with the playlist ----
         playlistBox.Location = new Point(22, 12);
         playlistBox.Size = new Size(330, 26);
-        playlistBox.BackColor = Theme.Search;
-        playlistBox.ForeColor = Theme.Strong;
+        playlistBox.BackColor = TubeTheme.Search;
+        playlistBox.ForeColor = TubeTheme.Strong;
         playlistBox.BorderStyle = BorderStyle.FixedSingle;
         playlistBox.PlaceholderText = "Paste a playlist link or id...";
         playlistBox.KeyDown += (_, e) =>
@@ -1789,8 +1964,8 @@ internal sealed class TubeClient : Form
                 Location = new Point(x, y),
                 Size = new Size(width, 32),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Search,
-                ForeColor = Theme.Strong,
+                BackColor = TubeTheme.Search,
+                ForeColor = TubeTheme.Strong,
                 Cursor = Cursors.Hand,
                 TabStop = false
             };
@@ -1803,8 +1978,8 @@ internal sealed class TubeClient : Form
         }
 
         Button load = Add("Load", 64, () => _ = LoadPlaylistAsync(playlistBox.Text));
-        load.BackColor = Theme.Accent;
-        load.ForeColor = Theme.Background;
+        load.BackColor = TubeTheme.Accent;
+        load.ForeColor = TubeTheme.Background;
 
         Add("Paste", 64, () =>
         {
@@ -1837,8 +2012,8 @@ internal sealed class TubeClient : Form
                 Text = text,
                 Location = new Point(left, 55),
                 AutoSize = true,
-                ForeColor = Theme.Text,
-                BackColor = Theme.Background
+                ForeColor = TubeTheme.Text,
+                BackColor = TubeTheme.Background
             };
 
             playlistBar.Controls.Add(label);
@@ -1849,8 +2024,8 @@ internal sealed class TubeClient : Form
         {
             box.DropDownStyle = ComboBoxStyle.DropDownList;
             box.FlatStyle = FlatStyle.Flat;
-            box.BackColor = Theme.Search;
-            box.ForeColor = Theme.Strong;
+            box.BackColor = TubeTheme.Search;
+            box.ForeColor = TubeTheme.Strong;
             box.Location = new Point(left, 52);
             box.Width = width;
             box.DisplayMember = nameof(SavedPlaylist.Title);
@@ -1876,8 +2051,8 @@ internal sealed class TubeClient : Form
             Location = new Point(416, 49),
             Size = new Size(74, 30),
             FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Search,
-            ForeColor = Theme.Strong,
+            BackColor = TubeTheme.Search,
+            ForeColor = TubeTheme.Strong,
             Cursor = Cursors.Hand,
             TabStop = false
         };
@@ -2128,9 +2303,9 @@ internal sealed class TubeClient : Form
     private void BuildSourcesView()
     {
         sourcesView.Dock = DockStyle.Fill;
-        sourcesView.BackColor = Theme.Background;
+        sourcesView.BackColor = TubeTheme.Background;
 
-        Panel buttons = new() { Dock = DockStyle.Top, Height = 48, BackColor = Theme.Background };
+        Panel buttons = new() { Dock = DockStyle.Top, Height = 48, BackColor = TubeTheme.Background };
 
         int x = 22;
 
@@ -2142,8 +2317,8 @@ internal sealed class TubeClient : Form
                 Location = new Point(x, 8),
                 Size = new Size(width, 32),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Search,
-                ForeColor = Theme.Strong,
+                BackColor = TubeTheme.Search,
+                ForeColor = TubeTheme.Strong,
                 Cursor = Cursors.Hand,
                 TabStop = false
             };
@@ -2170,7 +2345,7 @@ internal sealed class TubeClient : Form
 
         sourceList.Dock = DockStyle.Fill;
         sourceList.BorderStyle = BorderStyle.None;
-        sourceList.BackColor = Theme.Background;
+        sourceList.BackColor = TubeTheme.Background;
         sourceList.DrawMode = DrawMode.OwnerDrawFixed;
         sourceList.ItemHeight = 62;
         sourceList.IntegralHeight = false;
@@ -2180,7 +2355,7 @@ internal sealed class TubeClient : Form
         {
             Dock = DockStyle.Bottom,
             Height = 46,
-            ForeColor = Theme.Text,
+            ForeColor = TubeTheme.Text,
             Padding = new Padding(22, 6, 16, 0),
             Text = "New videos from these sources are saved in the background (newest first), " +
                    "so there is always something to watch offline."
@@ -2219,7 +2394,7 @@ internal sealed class TubeClient : Form
         TubeSource s = (TubeSource)sourceList.Items[e.Index];
         bool selected = (e.State & DrawItemState.Selected) != 0;
 
-        using SolidBrush back = new(selected ? Theme.ActiveRow : Theme.Background);
+        using SolidBrush back = new(selected ? TubeTheme.ActiveRow : TubeTheme.Background);
         e.Graphics.FillRectangle(back, e.Bounds);
 
         string kind = s.Kind switch
@@ -2235,14 +2410,14 @@ internal sealed class TubeClient : Form
                 ? "Not checked yet"
                 : "Checked " + Ago(s.LastRefresh.Value);
 
-        using Font bold = new("Segoe UI", 10.5f, FontStyle.Bold);
+        using Font bold = TubeTheme.Font(10.5f, FontStyle.Bold);
 
         TextRenderer.DrawText(
             e.Graphics,
             $"{s.Title}   ({kind}{(s.Enabled ? "" : ", off")})",
             bold,
             new Rectangle(e.Bounds.X + 22, e.Bounds.Y + 10, e.Bounds.Width - 44, 22),
-            s.Enabled ? Theme.Strong : Theme.Text,
+            s.Enabled ? TubeTheme.Strong : TubeTheme.Text,
             TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
         TextRenderer.DrawText(
@@ -2250,7 +2425,7 @@ internal sealed class TubeClient : Form
             $"newest {s.Count} per check  -  {status}",
             Font,
             new Rectangle(e.Bounds.X + 22, e.Bounds.Y + 34, e.Bounds.Width - 44, 20),
-            s.LastError != null ? Theme.Off : Theme.Text,
+            s.LastError != null ? TubeTheme.Off : TubeTheme.Text,
             TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
     }
 
@@ -2319,7 +2494,7 @@ internal sealed class TubeClient : Form
     private void BuildSettingsView()
     {
         settingsView.Dock = DockStyle.Fill;
-        settingsView.BackColor = Theme.Background;
+        settingsView.BackColor = TubeTheme.Background;
 
         TubeSettingsList list = settingsList = new TubeSettingsList { Dock = DockStyle.Fill };
         settingsView.Controls.Add(list);
@@ -2350,6 +2525,77 @@ internal sealed class TubeClient : Form
         string Count(int v) => v.ToString();
         string Off(int v, string unit) => v == 0 ? "Off" : v + " " + unit;
         TubeSettings s = library.Settings;
+
+        // ---- look ----
+        list.AddHeader("Look");
+
+        Cycle("", "Look", Enumerable.Range(0, TubeTheme.Presets.Length).ToArray(),
+            () => s.UtilTubeLook,
+            v =>
+            {
+                s.UtilTubeLook = v;
+
+                // A new look starts clean: colours picked by hand are cleared.
+                s.LookBackground = s.LookPanel = s.LookText = s.LookAccent = "";
+            },
+            v => TubeTheme.Presets[Math.Clamp(v, 0, TubeTheme.Presets.Length - 1)].Name,
+            "\"Same as the launcher\" (the default) makes UtilTube match the menu's theme.\n" +
+            "The others give UtilTube colours of its own.\n" +
+            "Click = next look, right-click = previous. Choosing a look clears colours you picked by hand.");
+
+        void ColourRow(string label, string slot, Func<string> get, Action<string> set) =>
+            list.AddRow("",
+                () => $"{label}: {TubeTheme.ToHex(TubeTheme.Current(slot))}{(get().Length > 0 ? "  (picked)" : "")}",
+                "Click to pick a colour (UtilTube follows it while you drag).\nRight-click puts it back to the look's own colour.",
+                reverse =>
+                {
+                    if (reverse)
+                    {
+                        set("");
+                        library.SettingsChanged();
+                        return;
+                    }
+
+                    // Picking a colour needs UtilTube's own look. Start it from the colours
+                    // UtilTube has now (the launcher's), so nothing else jumps.
+                    if (s.UtilTubeLook == 0)
+                    {
+                        s.LookBackground = TubeTheme.ToHex(TubeTheme.Background);
+                        s.LookPanel = TubeTheme.ToHex(TubeTheme.Search);
+                        s.LookText = TubeTheme.ToHex(TubeTheme.Text);
+                        s.LookAccent = TubeTheme.ToHex(TubeTheme.Accent);
+                        s.UtilTubeLook = 1;
+                    }
+
+                    string before = get();
+
+                    Color? picked = LiveColorPicker.Pick(this, label, TubeTheme.Current(slot), c =>
+                    {
+                        set(TubeTheme.ToHex(c));
+                        library.SettingsChanged();
+                    });
+
+                    set(picked == null ? before : TubeTheme.ToHex(picked.Value));
+                    library.SettingsChanged();
+                });
+
+        ColourRow("Accent colour", "accent", () => s.LookAccent, v => s.LookAccent = v);
+        ColourRow("Background colour", "background", () => s.LookBackground, v => s.LookBackground = v);
+        ColourRow("Panels and cards colour", "panel", () => s.LookPanel, v => s.LookPanel = v);
+        ColourRow("Text colour", "text", () => s.LookText, v => s.LookText = v);
+
+        Cycle("", "Video size", new[] { 0, 1, 2 },
+            () => s.CardSize, v => s.CardSize = v,
+            v => v == 0 ? "small" : v == 2 ? "large" : "normal",
+            "How big the video pictures are. Small fits more on screen.");
+
+        list.AddRow("", () => "Reset the look", "Back to matching the launcher, with normal video size.", _ =>
+        {
+            s.UtilTubeLook = 0;
+            s.LookBackground = s.LookPanel = s.LookText = s.LookAccent = "";
+            s.CardSize = 1;
+            library.SettingsChanged();
+        });
 
         // ---- account ----
         list.AddHeader("Account");
@@ -2472,6 +2718,14 @@ internal sealed class TubeClient : Form
             "yt-dlp: " + (YtDlp.Find() ?? "not installed") + "\nffmpeg: " + (FfmpegRecorder.FindFfmpeg() ?? "not found") +
             "\nClick to update yt-dlp (it looks videos up).",
             reverse => { _ = UpdateTool(new Button()); });
+
+        list.AddRow("",
+            () => FfmpegRecorder.FindFfmpeg() == null
+                ? $"Download ffmpeg ({FfmpegInstaller.ApproxSize})"
+                : "ffmpeg is installed",
+            "ffmpeg joins the video and audio of a download and makes MP4 screen recordings.\n" +
+            "Click to download it into this app's own folder (checked against its published checksum).",
+            reverse => { _ = DownloadFfmpegAsync(); });
 
         _ = s;
     }
@@ -2639,8 +2893,8 @@ internal sealed class SideBar : Control
     private const int TopPad = 10;
 
     private readonly Font glyphFont = new("Segoe MDL2 Assets", 14f);
-    private readonly Font labelFont = new("Segoe UI", 10.5f);
-    private readonly Font badgeFont = new("Segoe UI", 8.5f);
+    private readonly Font labelFont = TubeTheme.Font(10.5f);
+    private readonly Font badgeFont = TubeTheme.Font(8.5f);
 
     public bool Collapsed { get; set; }
 
@@ -2669,7 +2923,7 @@ internal sealed class SideBar : Control
             true);
 
         TabStop = false;
-        BackColor = Theme.Background;
+        BackColor = TubeTheme.Background;
     }
 
     public void SetEntries(IEnumerable<Entry> items)
@@ -2742,7 +2996,8 @@ internal sealed class SideBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;
-        g.Clear(Theme.Background);
+        g.Clear(TubeTheme.Background);
+        TubeGlass.Paint(g, this);
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         for (int i = 0; i < entries.Count; i++)
@@ -2752,7 +3007,7 @@ internal sealed class SideBar : Control
 
             if (entry.IsDivider)
             {
-                using Pen line = new(Color.FromArgb(50, Theme.Text));
+                using Pen line = new(Color.FromArgb(50, TubeTheme.Text));
                 g.DrawLine(line, r.X + 8, r.Y + 8, r.Right - 8, r.Y + 8);
                 continue;
             }
@@ -2763,22 +3018,22 @@ internal sealed class SideBar : Control
             {
                 using GraphicsPath path = Rounded(r, 8);
                 using SolidBrush back = new(isActive
-                    ? Theme.ActiveRow
-                    : Theme.Mix(Theme.Background, Theme.Accent, 0.07f));
+                    ? TubeTheme.ActiveRow
+                    : TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.07f));
 
                 g.FillPath(back, path);
             }
 
             if (isActive)
             {
-                using SolidBrush accent = new(Theme.Accent);
+                using SolidBrush accent = new(TubeTheme.Accent);
                 g.FillRectangle(accent, r.X, r.Y + 8, 3, r.Height - 16);
             }
 
-            Color color = isActive ? Theme.Strong : Theme.Text;
+            Color color = isActive ? TubeTheme.Strong : TubeTheme.Text;
 
             TextRenderer.DrawText(g, entry.Glyph, glyphFont,
-                new Rectangle(r.X + 6, r.Y, 40, r.Height), isActive ? Theme.Accent : color,
+                new Rectangle(r.X + 6, r.Y, 40, r.Height), isActive ? TubeTheme.Accent : color,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
 
             if (Collapsed)
@@ -2796,11 +3051,11 @@ internal sealed class SideBar : Control
                 Rectangle pill = new(r.Right - size.Width - 18, r.Y + (r.Height - 18) / 2, size.Width + 10, 18);
 
                 using GraphicsPath path = Rounded(pill, 9);
-                using SolidBrush back = new(Theme.Search);
+                using SolidBrush back = new(TubeTheme.Search);
 
                 g.FillPath(back, path);
 
-                TextRenderer.DrawText(g, text, badgeFont, pill, Theme.Text,
+                TextRenderer.DrawText(g, text, badgeFont, pill, TubeTheme.Text,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
         }
@@ -2841,20 +3096,47 @@ internal sealed class SideBar : Control
 
 internal sealed class VideoGrid : Control
 {
-    private const int CardW = 262;
-    private const int CardH = 244;
+    // Card size follows UtilTube -> Settings -> Look -> Video size (small / normal / large).
+    // Only the picture grows or shrinks; the text under it keeps its room.
+    private static double ThumbScale => TubeLibrary.Instance.Settings.CardSize switch
+    {
+        0 => 0.8,
+        2 => 1.25,
+        _ => 1.0
+    };
+
+    private static int ThumbW => (int)(240 * ThumbScale);
+    private static int ThumbH => ThumbW * 9 / 16;
+    private static int CardW => ThumbW + 22;
+    private static int CardH => ThumbH + 109;
+
     private const int Gap = 10;
     private const int Pad = 16;
-    private const int ThumbW = 240;
-    private const int ThumbH = 135;
+
+    /// <summary>The card size changed: lay the cards out again.</summary>
+    public void RefreshLayout()
+    {
+        UpdateScroll();
+        Invalidate();
+    }
 
     private List<TubeVideo> items = new();
     private readonly HashSet<string> selected = new();
-    private readonly VScrollBar bar = new() { Dock = DockStyle.Right };
+    private readonly TubeScrollBar bar = new();
 
-    private readonly Font titleFont = new("Segoe UI", 10f, FontStyle.Bold);
-    private readonly Font smallFont = new("Segoe UI", 9f);
+    private readonly Font titleFont = TubeTheme.Font(10f, FontStyle.Bold);
+    private readonly Font smallFont = TubeTheme.Font(9f);
     private readonly Font glyphFont = new("Segoe MDL2 Assets", 11f);
+
+    private int titleLine, smallLine;     // measured once: the fonts' line heights
+
+    // What each card looked like when it was last drawn (everything that shows on it that
+    // can change by itself), so a refresh repaints only the cards that really changed.
+    private readonly Dictionary<string, string> lastLook = new();
+
+    private string LookOf(TubeVideo v) =>
+        $"{v.State}|{(int)v.Progress}|{v.Watched}|{v.Keep}|{(int)(v.Position / 5)}|" +
+        $"{Status(v).Item1}|{IsWatchLater(v.Id)}|{ThumbCache.TryGet(v.Id) != null}";
 
     private int focusIndex = -1;
     private int anchorIndex = -1;
@@ -2886,7 +3168,7 @@ internal sealed class VideoGrid : Control
             true);
 
         TabStop = true;
-        BackColor = Theme.Background;
+        BackColor = TubeTheme.Background;
 
         bar.ValueChanged += (_, _) => Invalidate();
         Controls.Add(bar);
@@ -2903,12 +3185,29 @@ internal sealed class VideoGrid : Control
 
         if (same)
         {
-            // Only the live state (progress ...) changed.
-            Invalidate();
+            // Only the live state (progress, "deletes in ...", a thumbnail that arrived) can
+            // have changed: repaint just the cards whose look is not what was last drawn.
+            // (The whole grid used to be repainted on every refresh, a few times a second
+            // while downloads ran.)
+            for (int i = 0; i < items.Count; i++)
+            {
+                string look = LookOf(items[i]);
+
+                if (!lastLook.TryGetValue(items[i].Id, out string? old) || old != look)
+                {
+                    lastLook[items[i].Id] = look;
+                    InvalidateCard(i);
+                }
+            }
+
             return;
         }
 
         items = list;
+        lastLook.Clear();
+
+        foreach (TubeVideo v in list)
+            lastLook[v.Id] = LookOf(v);
 
         // The first few videos on screen are prepared in the background,
         // so clicking one starts playing almost at once.
@@ -2981,8 +3280,10 @@ internal sealed class VideoGrid : Control
 
     private int ContentHeight => Pad * 2 + RowCount * (CardH + Gap) - Gap;
 
-    private int LeftMargin =>
-        (ClientSize.Width - bar.Width - (Columns * (CardW + Gap) - Gap)) / 2;
+    // Left-aligned, so the first column lines up with the page title above it: the title
+    // starts where the thumbnails do (card edge + the 10 px the picture is inset), and the
+    // settings rows put their icons at the same place.
+    private int LeftMargin => 28;
 
     private Rectangle CardRect(int index)
     {
@@ -3033,26 +3334,27 @@ internal sealed class VideoGrid : Control
 
     private int HitTest(Point p)
     {
+        // Each card owns the space around it up to the middle of the gap to its neighbours.
+        // (The gaps used to belong to nobody: crossing one dropped the highlight and turned
+        // the pointer from a hand into an arrow for a moment, then back on the next card.
+        // That showed as flicker while moving over the videos.)
         int cols = Columns;
-        int x = p.X - LeftMargin;
+        int x = p.X - LeftMargin + Gap / 2;
 
         if (x < 0)
             return -1;
 
         int col = x / (CardW + Gap);
 
-        if (col >= cols || x % (CardW + Gap) >= CardW)
+        if (col >= cols)
             return -1;
 
-        int y = p.Y + bar.Value - Pad;
+        int y = p.Y + bar.Value - Pad + Gap / 2;
 
         if (y < 0)
             return -1;
 
         int row = y / (CardH + Gap);
-
-        if (y % (CardH + Gap) >= CardH)
-            return -1;
 
         int index = row * cols + col;
 
@@ -3167,12 +3469,29 @@ internal sealed class VideoGrid : Control
             if (index != hoverIndex)
                 PrefetchSoon(index);
 
+            int previous = hoverIndex;
+
             hoverIndex = index;
             hoverQuick = quick;
-            Invalidate();
+
+            // Only the card the pointer left and the one it entered are repainted. (The
+            // whole grid used to be: every thumbnail and the background picture again,
+            // each time the pointer crossed a card, which showed as flicker.)
+            InvalidateCard(previous);
+            InvalidateCard(index);
         }
 
         Cursor = index >= 0 ? Cursors.Hand : Cursors.Default;
+    }
+
+    private void InvalidateCard(int index)
+    {
+        if (index < 0 || index >= items.Count)
+            return;
+
+        Rectangle card = CardRect(index);
+        card.Inflate(4, 4);
+        Invalidate(card);
     }
 
     // Resting the mouse on a video resolves its stream in the background,
@@ -3216,9 +3535,11 @@ internal sealed class VideoGrid : Control
 
         if (hoverIndex != -1)
         {
+            int previous = hoverIndex;
+
             hoverIndex = -1;
             hoverQuick = "";
-            Invalidate();
+            InvalidateCard(previous);
         }
     }
 
@@ -3305,7 +3626,8 @@ internal sealed class VideoGrid : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;
-        g.Clear(Theme.Background);
+        g.Clear(TubeTheme.Background);
+        TubeGlass.Paint(g, this);
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         if (items.Count == 0)
@@ -3326,7 +3648,13 @@ internal sealed class VideoGrid : Control
                 if (index >= items.Count)
                     break;
 
-                DrawCard(g, items[index], CardRect(index), index);
+                // Only the cards in the part being repainted.
+                Rectangle cardRect = CardRect(index);
+
+                if (!cardRect.IntersectsWith(e.ClipRectangle))
+                    continue;
+
+                DrawCard(g, items[index], cardRect, index);
             }
         }
     }
@@ -3340,8 +3668,8 @@ internal sealed class VideoGrid : Control
         {
             using GraphicsPath cardPath = SideBar.Rounded(r, 10);
             using SolidBrush back = new(isSelected
-                ? Theme.ActiveRow
-                : Theme.Mix(Theme.Background, Theme.Accent, 0.06f));
+                ? TubeTheme.ActiveRow
+                : TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.06f));
 
             g.FillPath(back, cardPath);
         }
@@ -3349,7 +3677,7 @@ internal sealed class VideoGrid : Control
         if (index == focusIndex && Focused)
         {
             using GraphicsPath cardPath = SideBar.Rounded(r, 10);
-            using Pen focus = new(Theme.Accent, 1.5f);
+            using Pen focus = new(TubeTheme.Accent, 1.5f);
             g.DrawPath(focus, cardPath);
         }
 
@@ -3369,7 +3697,7 @@ internal sealed class VideoGrid : Control
             }
             else
             {
-                using SolidBrush placeholder = new(Theme.Search);
+                using SolidBrush placeholder = new(TubeTheme.Search);
                 g.FillRectangle(placeholder, thumb);
             }
 
@@ -3377,7 +3705,7 @@ internal sealed class VideoGrid : Control
             if (v.State == VideoState.Downloading)
             {
                 using SolidBrush track = new(Color.FromArgb(160, 0, 0, 0));
-                using SolidBrush fill = new(Theme.Accent);
+                using SolidBrush fill = new(TubeTheme.Accent);
 
                 g.FillRectangle(track, thumb.X, thumb.Bottom - 5, thumb.Width, 5);
                 g.FillRectangle(fill, thumb.X, thumb.Bottom - 5,
@@ -3385,7 +3713,7 @@ internal sealed class VideoGrid : Control
             }
             else if (v.State == VideoState.Done && v.Position > 5 && v.Duration > 0 && !v.Watched)
             {
-                using SolidBrush resume = new(Theme.Off);
+                using SolidBrush resume = new(TubeTheme.Off);
 
                 g.FillRectangle(resume, thumb.X, thumb.Bottom - 4,
                     (int)(thumb.Width * Math.Clamp(v.Position / v.Duration, 0, 1)), 4);
@@ -3418,7 +3746,7 @@ internal sealed class VideoGrid : Control
             using SolidBrush back = new(Color.FromArgb(205, 0, 0, 0));
             g.FillPath(back, tagPath);
 
-            TextRenderer.DrawText(g, "SAVED", smallFont, tag, Theme.On,
+            TextRenderer.DrawText(g, "SAVED", smallFont, tag, TubeTheme.On,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
 
@@ -3435,20 +3763,117 @@ internal sealed class VideoGrid : Control
         int x = r.X + 12;
         int width = r.Width - 24;
 
-        TextRenderer.DrawText(g, v.Title, titleFont,
-            new Rectangle(x, thumb.Bottom + 8, width, 36),
-            v.Watched ? Theme.Text : Theme.Strong,
-            TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        // The text lines follow the font's real line height (the menu font is not the height
+        // the old fixed offsets were made for): the title gets exactly two lines, ending in
+        // "..." rather than a third line cut in half.
+        if (titleLine == 0)
+        {
+            titleLine = TextRenderer.MeasureText("Ag", titleFont, new Size(1000, 100),
+                TextFormatFlags.NoPadding).Height + 1;
+
+            smallLine = TextRenderer.MeasureText("Ag", smallFont, new Size(1000, 100),
+                TextFormatFlags.NoPadding).Height + 1;
+        }
+
+        int titleTop = thumb.Bottom + 8;
+        int channelTop = titleTop + titleLine * 2 + 4;
+        int statusTop = channelTop + smallLine + 2;
+
+        (string firstLine, string secondLine) = TwoLines(v.Title, width);
+        Color titleColor = v.Watched ? TubeTheme.Text : TubeTheme.Strong;
+
+        TextRenderer.DrawText(g, firstLine, titleFont,
+            new Rectangle(x, titleTop, width, titleLine), titleColor,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+
+        if (secondLine.Length > 0)
+        {
+            TextRenderer.DrawText(g, secondLine, titleFont,
+                new Rectangle(x, titleTop + titleLine, width, titleLine), titleColor,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+        }
 
         TextRenderer.DrawText(g, v.Channel, smallFont,
-            new Rectangle(x, thumb.Bottom + 46, width, 18), Theme.Text,
+            new Rectangle(x, channelTop, width, smallLine), TubeTheme.Text,
             TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
         (string status, Color color) = Status(v);
 
         TextRenderer.DrawText(g, status, smallFont,
-            new Rectangle(x, thumb.Bottom + 64, width, 18), color,
+            new Rectangle(x, statusTop, width, smallLine), color,
             TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+    }
+
+    // A title on at most two lines, the second ending in "..." when it is cut. (Windows'
+    // own ellipsis does not work on wrapped text, which left the second line just cut off.)
+    private readonly Dictionary<(string, int), (string, string)> twoLines = new();
+
+    private (string, string) TwoLines(string text, int width)
+    {
+        if (twoLines.TryGetValue((text, width), out (string, string) cached))
+            return cached;
+
+        if (twoLines.Count > 500)
+            twoLines.Clear();
+
+        const TextFormatFlags flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+        Size huge = new(100000, 100);
+
+        int W(string s) => TextRenderer.MeasureText(s, titleFont, huge, flags).Width;
+
+        text = text.Trim();
+        (string, string) result;
+
+        if (W(text) <= width)
+        {
+            result = (text, "");
+        }
+        else
+        {
+            string[] words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            string first = "";
+            int next = 0;
+
+            for (; next < words.Length; next++)
+            {
+                string attempt = first.Length == 0 ? words[next] : first + " " + words[next];
+
+                if (W(attempt) > width)
+                    break;
+
+                first = attempt;
+            }
+
+            if (first.Length == 0 && words.Length > 0)
+            {
+                // One word too long for a line: cut it by letters.
+                int n = words[0].Length;
+
+                while (n > 1 && W(words[0][..n]) > width)
+                    n--;
+
+                first = words[0][..n];
+                words[0] = words[0][n..];
+                next = 0;
+            }
+
+            string rest = string.Join(" ", words.Skip(next));
+
+            if (W(rest) <= width)
+            {
+                result = (first, rest);
+            }
+            else
+            {
+                while (rest.Length > 1 && W(rest.TrimEnd() + "…") > width)
+                    rest = rest[..^1];
+
+                result = (first, rest.TrimEnd() + "…");
+            }
+        }
+
+        twoLines[(text, width)] = result;
+        return result;
     }
 
     private void DrawQuick(Graphics g, Rectangle r, string glyph, bool on, bool hot)
@@ -3456,7 +3881,7 @@ internal sealed class VideoGrid : Control
         using SolidBrush back = new(Color.FromArgb(hot ? 240 : 200, 0, 0, 0));
         g.FillEllipse(back, r);
 
-        TextRenderer.DrawText(g, glyph, glyphFont, r, on ? Theme.Accent : Color.White,
+        TextRenderer.DrawText(g, glyph, glyphFont, r, on ? TubeTheme.Accent : Color.White,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
@@ -3470,7 +3895,7 @@ internal sealed class VideoGrid : Control
             if (v.State == VideoState.Done)
                 text += "  -  saved";
 
-            return (text, Theme.Text);
+            return (text, TubeTheme.Text);
         }
 
         switch (v.State)
@@ -3498,22 +3923,22 @@ internal sealed class VideoGrid : Control
                             : $"  -  deletes in {left.Value.Minutes} min";
                 }
 
-                return (text, Theme.On);
+                return (text, TubeTheme.On);
             }
 
             case VideoState.Downloading:
-                return ($"Saving  {v.Progress:0}%   {v.Speed}", Theme.Accent);
+                return ($"Saving  {v.Progress:0}%   {v.Speed}", TubeTheme.Accent);
 
             case VideoState.Queued:
                 return (v.Attempts > 0
                     ? $"Retry {v.Attempts}/3: {v.Error}"
-                    : "Waiting to save offline", Theme.Text);
+                    : "Waiting to save offline", TubeTheme.Text);
 
             case VideoState.Failed:
-                return ("Failed: " + v.Error, Theme.Off);
+                return ("Failed: " + v.Error, TubeTheme.Off);
 
             default:
-                return (IsWatchLater(v.Id) ? "In Watch later" : "Click to watch", Theme.Number);
+                return (IsWatchLater(v.Id) ? "In Watch later" : "Click to watch", TubeTheme.Number);
         }
     }
 
@@ -3629,7 +4054,7 @@ internal sealed class OnlinePrompt : DarkDialog
                    "It will still be saved for offline viewing when its turn comes.",
             Location = new Point(20, 16),
             Size = new Size(480, 90),
-            ForeColor = Theme.Strong
+            ForeColor = TubeTheme.Strong
         });
 
         dontAsk = new CheckBox
@@ -3637,7 +4062,7 @@ internal sealed class OnlinePrompt : DarkDialog
             Text = "Don't ask again (just add it to the queue)",
             Location = new Point(20, 112),
             Size = new Size(420, 24),
-            ForeColor = Theme.Text
+            ForeColor = TubeTheme.Text
         };
 
         Controls.Add(dontAsk);
@@ -3646,8 +4071,8 @@ internal sealed class OnlinePrompt : DarkDialog
         Button save = MakeButton("Just save it", 190, 148, 130);
         Button cancel = MakeButton("Cancel", 330, 148, 90);
 
-        online.BackColor = Theme.Accent;
-        online.ForeColor = Theme.Background;
+        online.BackColor = TubeTheme.Accent;
+        online.ForeColor = TubeTheme.Background;
 
         online.Click += (_, _) => { Choice = OnlineChoice.Online; DialogResult = DialogResult.OK; };
         save.Click += (_, _) => { Choice = OnlineChoice.SaveOnly; DialogResult = DialogResult.OK; };

@@ -432,26 +432,27 @@ internal sealed class GoogleSignInForm : Form
         Text = "Sign in to YouTube";
         ClientSize = new Size(520, 720);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Theme.Background;
-        ForeColor = Theme.Strong;
-        Font = new Font("Segoe UI", 9.5f);
+        BackColor = TubeTheme.Background;
+        ForeColor = TubeTheme.Strong;
+        Font = TubeTheme.Font(9.5f);
 
-        Panel bar = new() { Dock = DockStyle.Top, Height = 46, BackColor = Theme.Search };
+        Panel bar = new() { Dock = DockStyle.Top, Height = 46, BackColor = TubeTheme.Search };
 
         hint.Text = "Sign in with your Google account, then wait for the YouTube home page.";
         hint.AutoSize = false;
         hint.Dock = DockStyle.Fill;
         hint.TextAlign = ContentAlignment.MiddleLeft;
         hint.Padding = new Padding(12, 0, 0, 0);
-        hint.ForeColor = Theme.Text;
+        hint.ForeColor = TubeTheme.Text;
 
         finish.Text = "I'm signed in";
         finish.Dock = DockStyle.Right;
         finish.Width = 120;
         finish.FlatStyle = FlatStyle.Flat;
-        finish.BackColor = Theme.Accent;
-        finish.ForeColor = Theme.Background;
+        finish.BackColor = TubeTheme.Accent;
+        finish.ForeColor = TubeTheme.Background;
         finish.FlatAppearance.BorderSize = 0;
+        TubeTheme.StyleHover(finish);
         finish.Click += async (_, _) => await Finish();
 
         bar.Controls.Add(hint);

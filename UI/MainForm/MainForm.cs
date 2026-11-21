@@ -57,7 +57,7 @@ public sealed partial class MainForm : Form
     private readonly HotkeySlot toggleKey = new()
     {
         Id = 1001,
-        Name = "Translator shortcut"
+        Name = "Letter conversion shortcut"
     };
 
     private readonly HotkeySlot launcherKey = new()
@@ -102,6 +102,11 @@ public sealed partial class MainForm : Form
     private IntPtr lastExternalWindow;
 
     private readonly OutlinedLabel breadcrumb = new();
+
+    // A button at the top right of every page except home: one click back.
+    private readonly Label backButton = new();
+    private Font? backFont;
+    private bool backHover;
     private readonly Label statusLabel = new();
 
     private AppSettings settings = new();
@@ -139,7 +144,18 @@ public sealed partial class MainForm : Form
     private bool updatingMenu;
 
     private int selectedIndex;
+    // The first row of the view: where it is going...
     private int scrollTop;
+
+    // ...where it is right now while it glides there (in rows, so 3.5 is half a row down),
+    // the first entry the row controls are filled with, and what the wheel has not yet
+    // added up to a whole row.
+    private float scrollVisual;
+    private int boundTop;
+    private float wheelRemainder;
+
+    // Rows in the view (fewer than MaxRows when the list is short).
+    private int ViewRows => Math.Clamp(displayedEntries.Count - scrollTop, 0, MaxRows);
 
     public MainForm()
     {
@@ -212,6 +228,23 @@ public sealed partial class MainForm : Form
         SetupPrintScreen();
         SetupTube();
 
+        // The set-up guide leads the home page.
+        if (!mainEntries.Any(e => e.targetPage == "Guide"))
+        {
+            mainEntries.Insert(0, new MenuEntry(0, "", "Set-up guide", targetPage: "Guide"));
+            mainEntries.Insert(1, new MenuEntry(0, "", "Functions", targetPage: "Functions"));
+            mainEntries.Insert(2, new MenuEntry(0, "", "Modules", targetPage: "Modules"));
+
+            List<MenuEntry> numbered = Renumber(mainEntries);
+            mainEntries.Clear();
+            mainEntries.AddRange(numbered);
+        }
+
+        // The menu as it ships, then in the order the user chose (Setup -> Re-order the menu).
+        defaultMainOrder = mainEntries.Select(e => e.Label).ToList();
+        ApplyMenuOrder();
+
+        LoadModules();
         BuildPages();
         BuildInterface();
         InitAppearance();
@@ -244,7 +277,7 @@ public sealed partial class MainForm : Form
         );
 
         trayMenu.Items.Add(
-            "Toggle typing converter",
+            "Toggle letter conversion En -> Ru",
             null,
             (_, _) => ToggleTyping()
         );
@@ -405,7 +438,7 @@ public sealed partial class MainForm : Form
         {
             BeginInvoke(new Action(() =>
             {
-                ShowPage("home");
+                ShowPage(PageToOpen());
                 OpenLauncher();
             }));
         }
@@ -431,12 +464,27 @@ public sealed partial class MainForm : Form
             return;
         }
 
-        ShowPage("home");
+        ShowPage(PageToOpen());
         OpenLauncher();
+    }
+
+    // Which page a hotkey opens on: home, except that the set-up guide comes back
+    // if it was on screen when the launcher closed (a shortcut press or a click
+    // elsewhere must not lose the user's place in it).
+    private bool resumeGuide;
+
+    private string PageToOpen()
+    {
+        string page = resumeGuide ? "Guide" : "home";
+        resumeGuide = false;
+        return page;
     }
 
     private void HideToTray(bool animate = true)
     {
+        if (Visible && !hiding)
+            resumeGuide = currentPage == "Guide";
+
         CloseFlyout();
         CancelShortcutBinding();
 
@@ -472,7 +520,16 @@ public sealed partial class MainForm : Form
         base.OnShown(e);
 
         if (startHidden)
+        {
             HideToTray(animate: false);
+        }
+        else if (!settings.GuideShown)
+        {
+            // First start: walk the user through the set-up once.
+            settings.GuideShown = true;
+            SaveSettings();
+            ShowPage("Guide");
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -548,13 +605,27 @@ public sealed partial class MainForm : Form
     }
 
     // Where Back / Esc / Left go from the current page.
-    private string ParentPage() =>
+    // True while the user is on a page they opened from the set-up guide.
+    private bool guideReturn;
+
+    // Back from a page opened in the guide goes back to the guide.
+    private string ParentPage()
+    {
+        string parent = ParentPageOf();
+
+        return guideReturn && parent == "home" && currentPage != "Guide"
+            ? "Guide"
+            : parent;
+    }
+
+    private string ParentPageOf() =>
         currentPage == "VaultEntry" ? "Vault" :
         currentPage == "TextTool" ? "Text" :
         currentPage == "Grab" ? "Tools" :
         currentPage == "Notifications" ? "Style" :
         currentPage == "Typing" ? "Setup" :
         currentPage == "Pinned" ? "Tools" :
+        currentPage.StartsWith(ModulePrefix, StringComparison.Ordinal) ? "Modules" :
         currentPage == "TypingStyles" ? "Typing" :
         currentPage.StartsWith("Style", StringComparison.Ordinal) && currentPage != "Style" ? "Style" :
         currentPage == "SkinAssets" ? "Style" :
@@ -594,6 +665,24 @@ public sealed partial class MainForm : Form
         };
 
         Controls.Add(breadcrumb);
+
+        backButton.Text = "‹ Back";
+        backButton.TextAlign = ContentAlignment.MiddleCenter;
+        backButton.Cursor = Cursors.Hand;
+        backButton.Visible = false;
+
+        backButton.Click += (_, _) =>
+        {
+            if (currentPage != "home")
+                ShowPage(ParentPage());
+        };
+
+        backButton.MouseEnter += (_, _) => { backHover = true; StyleBackButton(); };
+        backButton.MouseLeave += (_, _) => { backHover = false; StyleBackButton(); };
+
+        StyleBackButton();
+        Controls.Add(backButton);
+        backButton.BringToFront();
 
         menuBox.Location = new Point(20, 40);
         menuBox.Size = new Size(MenuWidth, 388);
@@ -713,7 +802,7 @@ public sealed partial class MainForm : Form
             int thumbHeight = Math.Max(
                 16, (int)(height * (float)MaxRows / count));
 
-            float progress = scrollTop / (float)(count - MaxRows);
+            float progress = Math.Clamp(scrollVisual / (count - MaxRows), 0f, 1f);
             int thumbTop = (int)((height - thumbHeight) * progress);
 
             using SolidBrush brush = new(Color.FromArgb(110, AccentColor));
@@ -735,12 +824,50 @@ public sealed partial class MainForm : Form
         ResumeLayout(false);
     }
 
+    // The back button follows the theme and sits at the right end of the title row.
+    private void StyleBackButton()
+    {
+        backButton.Size = new Size(
+            (int)(70 * Theme.MenuFontScale), (int)(24 * Theme.MenuFontScale));
+
+        backButton.Location = new Point(20 + MenuWidth - backButton.Width, 8);
+
+        // The button's font is its own: never dispose the one a control inherits (that is
+        // the whole app's shared default font, and everything that creates a text box
+        // afterwards, UtilTube for one, would fail with "Parameter is not valid").
+        float fontSize = 9f * Theme.MenuFontScale;
+
+        if (backFont == null ||
+            Math.Abs(backFont.Size - fontSize) > 0.1f ||
+            !string.Equals(backFont.FontFamily.Name, Theme.MenuFontFamily, StringComparison.OrdinalIgnoreCase))
+        {
+            Font? old = backFont;
+            backFont = Theme.CreateMenuFont(fontSize, FontStyle.Bold);
+            backButton.Font = backFont;
+            old?.Dispose();
+        }
+
+        backButton.ForeColor = Theme.Strong;
+
+        backButton.BackColor = Theme.Mix(
+            Theme.Background, Theme.Accent, backHover ? 0.55f : 0.30f);
+
+        backButton.Invalidate();
+    }
+
     private void ShowPage(string page, bool keepSelection = false)
     {
         CloseFlyout();
         updatingMenu = true;
 
+        // A page opened from the set-up guide offers a way straight back to it.
+        if (page == "Guide" || page == "home")
+            guideReturn = false;
+        else if (currentPage == "Guide")
+            guideReturn = true;
+
         currentPage = page;
+        backButton.Visible = page != "home";
 
         breadcrumb.Text = page == "home"
             ? "home"
@@ -748,6 +875,8 @@ public sealed partial class MainForm : Form
                 ? $"home / Style / {page[5..]}"
             : page == "SkinAssets"
                 ? "home / Style / Skin images"
+            : page.StartsWith(ModulePrefix, StringComparison.Ordinal)
+                ? $"home / Modules / {Trunc(modules.FirstOrDefault(m => ModulePrefix + m.Id == page)?.Name ?? page[ModulePrefix.Length..], 20)}"
             : page == "Notifications"
                 ? "home / Style / Notifications"
             : page == "VaultEntry"
@@ -761,6 +890,7 @@ public sealed partial class MainForm : Form
             "home" => "Search apps, files, math, web...",
             "Apps" => "Search apps...",
             "Find" => "Search files and open windows...",
+            "Functions" => "Search every function and setting...",
             "Clipboard" => "Search clipboard history...",
             "TextTool" => $"{textToolName}: type or paste text...",
             "Grab" => "Paste a link (Instagram, TikTok, X, Reddit, SoundCloud, Spotify...)",
@@ -786,7 +916,10 @@ public sealed partial class MainForm : Form
         RefreshRows(animateIn: !keepSelection);
         UpdateStatus(translator.Enabled);
 
-        menuBox.Invalidate();
+        // A new page repaints the whole menu. A refresh of the same page (a setting changed
+        // its text) repaints only the rows whose text changed: they invalidate themselves.
+        if (!keepSelection)
+            menuBox.Invalidate();
     }
 
     private void SearchBox_TextChanged(object? sender, EventArgs e)
@@ -809,11 +942,29 @@ public sealed partial class MainForm : Form
 
         displayedEntries = GetEntries(query);
 
+        // Opened from the set-up guide: its first row says "Return to guide"
+        // (this replaces the page's own "Set-up guide..." row, if it has one).
+        if (guideReturn && query.Length == 0 && currentPage != "Guide" && currentPage != "home")
+        {
+            List<MenuEntry> withReturn = displayedEntries
+                .Where(e => e.targetPage != "Guide")
+                .ToList();
+
+            withReturn.Insert(0, new MenuEntry(0, "", "Return to guide", targetPage: "Guide"));
+            displayedEntries = Renumber(withReturn);
+        }
+
         selectedIndex = displayedEntries.Count == 0
             ? -1
             : Math.Clamp(selectedIndex, 0, displayedEntries.Count - 1);
 
         ClampScroll();
+
+        // New content (a page, a search): the view is simply there, nothing glides.
+        scrollVisual = scrollTop;
+        boundTop = scrollTop;
+        wheelRemainder = 0;
+
         RebuildRows(animateIn);
     }
 
@@ -840,14 +991,11 @@ public sealed partial class MainForm : Form
         selectedIndex = Math.Clamp(
             newIndex, 0, displayedEntries.Count - 1);
 
-        int oldTop = scrollTop;
-
         ClampScroll();
 
-        if (oldTop != scrollTop)
-            RebuildRows(false);
-        else
-            UpdateRowStates();
+        // The view glides to its new place (see UiTick); the highlight moves at once.
+        UpdateRowStates();
+        StartUi();
     }
 
     private void RebuildRows(bool animateIn)
@@ -856,12 +1004,17 @@ public sealed partial class MainForm : Form
         // (and a new page does not pay for building thirteen controls).
         bool reuse = visibleRows.Count > 0;
 
-        int visible = Math.Clamp(
-            displayedEntries.Count - scrollTop, 0, MaxRows);
+        int visible = ViewRows;
+
+        // While the view glides between two rows, one more row shows at the edge.
+        bool between = scrollVisual - boundTop > 0.001f;
+
+        int bound = Math.Clamp(
+            displayedEntries.Count - boundTop, 0, visible + (between ? 1 : 0));
 
         if (reuse)
         {
-            while (visibleRows.Count > visible)
+            while (visibleRows.Count > bound)
             {
                 LauncherRow extra = visibleRows[^1];
 
@@ -895,9 +1048,9 @@ public sealed partial class MainForm : Form
 
         List<LauncherRow> created = new();
 
-        for (int i = 0; i < visible; i++)
+        for (int i = 0; i < bound; i++)
         {
-            int absolute = scrollTop + i;
+            int absolute = boundTop + i;
             MenuEntry entry = displayedEntries[absolute];
 
             LauncherRow row;
@@ -1001,11 +1154,19 @@ public sealed partial class MainForm : Form
 
         LayoutRows();
 
-        rowsPanel.Invalidate();
+        // The see-through rows repaint with their panel, so it is repainted only when the
+        // rows themselves changed (new page, new rows, a different count for the scroll
+        // thumb). A refresh that only changes some row's text repaints just that row.
+        if (animateIn || created.Count > 0 || displayedEntries.Count != lastShownCount)
+            rowsPanel.Invalidate();
+
+        lastShownCount = displayedEntries.Count;
 
         if (animateIn)
             StartUi();
     }
+
+    private int lastShownCount = -1;
 
     private static string MenuIconKey(string page, MenuEntry entry)
     {
@@ -1021,7 +1182,13 @@ public sealed partial class MainForm : Form
     // them down; the window grows with them frame by frame.
     private void LayoutRows()
     {
-        int y = 0;
+        // While the view glides, every row sits a fraction of a row higher than its slot.
+        int offset = (int)Math.Round((scrollVisual - boundTop) * RowHeight);
+
+        int y = -offset;
+        int viewHeight = 0;
+        int index = 0;
+        int viewRows = ViewRows;
         bool unfolded = false;
 
         foreach (LauncherRow row in visibleRows)
@@ -1035,14 +1202,19 @@ public sealed partial class MainForm : Form
                 unfolded = true;
 
             y += h;
+
+            // The panel is as tall as the rows in the view (the extra one at the edge is
+            // clipped by it).
+            if (index++ < viewRows)
+                viewHeight += h;
         }
 
-        if (rowsPanel.Height != y)
-            rowsPanel.Height = y;
+        if (rowsPanel.Height != viewHeight)
+            rowsPanel.Height = viewHeight;
 
         if (unfolded || rowsWereUnfolded)
         {
-            menuHeightTarget = Chrome + y;
+            menuHeightTarget = Chrome + viewHeight;
         }
 
         rowsWereUnfolded = unfolded;
@@ -1054,8 +1226,34 @@ public sealed partial class MainForm : Form
     // part of the list forwards it here.
     private void OnListWheel(object? sender, MouseEventArgs e)
     {
-        int step = e.Delta > 0 ? -3 : 3;
-        MoveSelection(selectedIndex + step);
+        if (displayedEntries.Count == 0)
+            return;
+
+        // A notch is 120 and scrolls 3 rows. A mouse with a finer wheel sends many small
+        // steps: they add up, so it scrolls as far as a normal one, not 3 rows per event.
+        wheelRemainder += e.Delta / 120f * 3f;
+        int rows = (int)wheelRemainder;
+
+        if (rows == 0)
+            return;
+
+        wheelRemainder -= rows;
+
+        // Everything fits: the wheel moves the highlight.
+        if (displayedEntries.Count <= MaxRows)
+        {
+            MoveSelection(selectedIndex - rows);
+            return;
+        }
+
+        // A long list: the wheel scrolls the view itself, not the highlight, and glides
+        // there. (It used to move the highlight, so the list only started to move once the
+        // highlight reached an edge, and then jumped.)
+        scrollTop = Math.Clamp(scrollTop - rows, 0, displayedEntries.Count - MaxRows);
+        selectedIndex = Math.Clamp(selectedIndex, scrollTop, scrollTop + MaxRows - 1);
+
+        UpdateRowStates();
+        StartUi();
     }
 
     // Shows the real icon (app / file type) once it is available.
@@ -1097,7 +1295,7 @@ public sealed partial class MainForm : Form
     private void UpdateRowStates()
     {
         for (int i = 0; i < visibleRows.Count; i++)
-            visibleRows[i].IsActive = scrollTop + i == selectedIndex;
+            visibleRows[i].IsActive = boundTop + i == selectedIndex;
 
         StartUi();
     }
@@ -1149,6 +1347,33 @@ public sealed partial class MainForm : Form
         lastUiTick = now;
 
         bool busy = false;
+
+        // The view glides to where the wheel or the keys sent it: pixel by pixel, easing out.
+        if (scrollVisual != scrollTop)
+        {
+            float difference = scrollTop - scrollVisual;
+
+            if (dt <= 0 || Math.Abs(difference) < 0.01f)
+                scrollVisual = scrollTop;
+            else
+                scrollVisual += difference * (float)(1 - Math.Exp(-dt / 0.06));
+
+            busy = true;
+
+            int wantedBound = (int)Math.Floor(scrollVisual + 0.0001f);
+            bool between = scrollVisual - wantedBound > 0.001f;
+            int wantedRows = Math.Clamp(
+                displayedEntries.Count - wantedBound, 0, ViewRows + (between ? 1 : 0));
+
+            // The rows are filled with new entries as the view passes them.
+            if (wantedBound != boundTop || wantedRows != visibleRows.Count)
+            {
+                boundTop = wantedBound;
+                RebuildRows(false);
+            }
+
+            rowsPanel.Invalidate();
+        }
 
         // Window height: exponential ease-out.
         if (Math.Abs(menuHeightTarget - menuHeightCurrent) > 0.5f)
@@ -1322,7 +1547,7 @@ public sealed partial class MainForm : Form
         {
             holdFired = true;
 
-            ShowPage("home");
+            ShowPage(PageToOpen());
             OpenLauncher();
         }
     }
@@ -1369,20 +1594,26 @@ public sealed partial class MainForm : Form
         if (waitingForHotkey)
             return;
 
-        statusLabel.Text = translator.Mode switch
+        string text = translator.Mode switch
         {
-            TypingMode.Off => "typing converter: disabled",
+            TypingMode.Off => "letter conversion: disabled",
             TypingMode.Weird => enabled ? "● WEIRD TEXT: ON" : "○ WEIRD TEXT: OFF",
-            _ => enabled ? "● MODE: ON" : "○ MODE: OFF"
+            _ => enabled ? "● Letter conversion En -> Ru: ON" : "○ Letter conversion En -> Ru: OFF"
         };
 
-        statusLabel.ForeColor = translator.Mode == TypingMode.Off
+        Color color = translator.Mode == TypingMode.Off
             ? Theme.Mix(Theme.Text, Theme.Background, 0.4f)
             : enabled
                 ? OnColor
                 : OffColor;
 
-        statusLabel.Invalidate();
+        // Only when it really changed: this runs on every page refresh, and repainting an
+        // unchanged label (it sits on the background picture) is what made the menu flicker.
+        if (statusLabel.Text != text)
+            statusLabel.Text = text;
+
+        if (statusLabel.ForeColor != color)
+            statusLabel.ForeColor = color;
     }
 
     // --------------------------------------------------
@@ -1584,6 +1815,15 @@ public sealed partial class MainForm : Form
                 OnToggleHotkey();
             else if (id == launcherKey.Id)
                 ToggleLauncher();
+        }
+        else if (m.Msg == 0x0319 /* WM_APPCOMMAND */ &&
+                 (((long)m.LParam >> 16) & 0xFFF) == 1 /* browser back: the mouse's back button */)
+        {
+            if (currentPage != "home")
+                ShowPage(ParentPage());
+
+            m.Result = (IntPtr)1;
+            return;
         }
         else if (m.Msg == WM_CLIPBOARDUPDATE)
         {

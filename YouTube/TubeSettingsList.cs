@@ -14,7 +14,7 @@ namespace UtilMaster3000;
 // the explanation underneath.
 // ======================================================
 
-internal sealed class TubeSettingsList : Panel
+internal sealed class TubeSettingsList : GlassPanel
 {
     private sealed class Item
     {
@@ -29,19 +29,25 @@ internal sealed class TubeSettingsList : Panel
     private const string Font = "Consolas";
 
     private readonly List<Item> items = new();
-    private readonly Panel inner = new();
+    private readonly GlassPanel inner = new();
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 16 };
     private readonly Stopwatch clock = Stopwatch.StartNew();
 
     private long lastTick;
     private int laidOutWidth = -1;
 
+    private readonly TubeScrollBar scroll = new();
+
     public TubeSettingsList()
     {
-        AutoScroll = true;
-        BackColor = Theme.Background;
-        inner.BackColor = Theme.Background;
+        // Scrolling is done here (with the themed bar), not by Windows' own scroll bars.
+        BackColor = TubeTheme.Background;
+        inner.BackColor = TubeTheme.Background;
+        scroll.Visible = false;
+        scroll.ValueChanged += (_, _) => inner.Top = -scroll.Value;
+
         Controls.Add(inner);
+        Controls.Add(scroll);
 
         timer.Tick += (_, _) => Step();
         VisibleChanged += (_, _) => timer.Enabled = Visible;
@@ -64,8 +70,11 @@ internal sealed class TubeSettingsList : Panel
     {
         LauncherRow row = new(-2, item.Icon, item.Label(), Font)
         {
-            Width = Math.Max(300, ClientSize.Width)
+            Width = Math.Max(300, ClientSize.Width),
+            UseTubeLook = true
         };
+
+        row.ApplyAppearance();
 
         item.Row = row;
 
@@ -109,16 +118,12 @@ internal sealed class TubeSettingsList : Panel
         Layout_();
     }
 
-    private void Scroll(int delta)
-    {
-        int offset = -AutoScrollPosition.Y;
-        int next = Math.Max(0, offset - Math.Sign(delta) * 90);
-        AutoScrollPosition = new Point(0, next);
-    }
+    private void Scroll(int delta) =>
+        scroll.Value -= Math.Sign(delta) * 90;
 
     private void Layout_()
     {
-        int width = Math.Max(300, ClientSize.Width);
+        int width = Math.Max(300, ClientSize.Width - (scroll.Visible ? scroll.Width : 0));
 
         if (width != laidOutWidth)
         {
@@ -146,6 +151,21 @@ internal sealed class TubeSettingsList : Panel
 
         if (inner.Width != width || inner.Height != y + 16)
             inner.Size = new Size(width, y + 16);
+
+        // The themed scroll bar appears when the list is taller than the window.
+        bool needed = inner.Height > ClientSize.Height && ClientSize.Height > 0;
+
+        scroll.Maximum = Math.Max(1, inner.Height);
+        scroll.LargeChange = Math.Max(1, ClientSize.Height);
+
+        if (scroll.Visible != needed)
+        {
+            scroll.Visible = needed;
+            laidOutWidth = -1;
+        }
+
+        if (!needed)
+            scroll.Value = 0;
     }
 
     private void Step()

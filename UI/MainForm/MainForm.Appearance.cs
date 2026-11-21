@@ -127,6 +127,7 @@ public sealed partial class MainForm
         breadcrumb.FillColor = Theme.Strong;
         breadcrumb.OutlineColor = Theme.Background;
         breadcrumb.Invalidate();
+        StyleBackButton();
 
         notification.ApplyTheme();
 
@@ -1188,8 +1189,10 @@ public sealed partial class MainForm
             {
                 Say("Video background",
                     "Video backgrounds need ffmpeg to convert them.\n\n" +
-                    "Install it with:\n\nwinget install ffmpeg\n\n" +
+                    "It will be offered for download now; pick the video again afterwards. " +
                     "Images and GIFs work without it.");
+
+                DownloadFfmpeg();
                 return;
             }
 

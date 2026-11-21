@@ -141,7 +141,7 @@ internal sealed class VideoPlayerForm : Form
             Content = sideList,
             VerticalScrollBarVisibility = WpfControls.ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = WpfControls.ScrollBarVisibility.Disabled,
-            Background = Brush(Theme.Background),
+            Background = Brush(TubeTheme.Background),
             Focusable = false
         };
 
@@ -150,15 +150,15 @@ internal sealed class VideoPlayerForm : Form
         scroll.Resources.Add(typeof(WpfControls.Primitives.ScrollBar), ThemedScrollBarStyle());
 
         sideHost.Child = scroll;
-        sideHost.BackColor = Theme.Background;
+        sideHost.BackColor = TubeTheme.Background;
     }
 
     private static string Hex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
     private static System.Windows.Style ThemedScrollBarStyle()
     {
-        string thumb = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.5f));
-        string hover = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.8f));
+        string thumb = Hex(TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.5f));
+        string hover = Hex(TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.8f));
 
         string xaml = $@"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -237,7 +237,7 @@ internal sealed class VideoPlayerForm : Form
         sideList.Children.Add(new WpfControls.TextBlock
         {
             Text = "Recommended",
-            Foreground = Brush(Theme.Accent),
+            Foreground = Brush(TubeTheme.Accent),
             FontSize = 14,
             FontWeight = System.Windows.FontWeights.SemiBold,
             Margin = new System.Windows.Thickness(8, 4, 0, 6)
@@ -259,7 +259,7 @@ internal sealed class VideoPlayerForm : Form
             sideList.Children.Add(new WpfControls.TextBlock
             {
                 Text = "Nothing to suggest yet.\nSign in under UtilTube Settings, or let your feeds load.",
-                Foreground = Brush(Theme.Text),
+                Foreground = Brush(TubeTheme.Text),
                 TextWrapping = System.Windows.TextWrapping.Wrap,
                 FontSize = 12,
                 Margin = new System.Windows.Thickness(8, 4, 8, 0)
@@ -310,7 +310,7 @@ internal sealed class VideoPlayerForm : Form
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Theme.Background;
+            BackColor = TubeTheme.Background;
             Opacity = 0.55;
         }
 
@@ -642,7 +642,7 @@ internal sealed class VideoPlayerForm : Form
 
         Text = "UtilTube";
         BackColor = Color.Black;
-        ForeColor = Theme.Strong;
+        ForeColor = TubeTheme.Strong;
         ClientSize = new Size(960, 592);
         MinimumSize = new Size(520, 340);
         StartPosition = FormStartPosition.CenterScreen;
@@ -803,10 +803,10 @@ internal sealed class VideoPlayerForm : Form
         button.Font = new Font("Segoe MDL2 Assets", size);
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderSize = 0;
-        button.FlatAppearance.MouseOverBackColor = Theme.ActiveRow;
-        button.FlatAppearance.MouseDownBackColor = Theme.ActiveRow;
-        button.BackColor = Theme.Background;
-        button.ForeColor = Theme.Strong;
+        button.FlatAppearance.MouseOverBackColor = TubeTheme.ActiveRow;
+        button.FlatAppearance.MouseDownBackColor = TubeTheme.ActiveRow;
+        button.BackColor = TubeTheme.Background;
+        button.ForeColor = TubeTheme.Strong;
         button.Size = new Size(32, 28);
         button.Padding = Padding.Empty;
         button.TabStop = false;
@@ -820,7 +820,7 @@ internal sealed class VideoPlayerForm : Form
     {
         // Two slim rows: the seek line on top, the buttons below it.
         bar.Height = 52;
-        bar.BackColor = Theme.Background;
+        bar.BackColor = TubeTheme.Background;
 
         IconButton(prev, "\uE892", "Previous  (P)");
         IconButton(play, "\uE769", "Play / pause  (Space)", 12);
@@ -831,13 +831,13 @@ internal sealed class VideoPlayerForm : Form
         IconButton(fullButton, "\uE740", "Fullscreen  (F)");
 
         speedButton.Text = "1x";
-        speedButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        speedButton.Font = TubeTheme.Font(9f, FontStyle.Bold);
         speedButton.FlatStyle = FlatStyle.Flat;
         speedButton.FlatAppearance.BorderSize = 0;
-        speedButton.FlatAppearance.MouseOverBackColor = Theme.ActiveRow;
-        speedButton.FlatAppearance.MouseDownBackColor = Theme.ActiveRow;
-        speedButton.BackColor = Theme.Background;
-        speedButton.ForeColor = Theme.Strong;
+        speedButton.FlatAppearance.MouseOverBackColor = TubeTheme.ActiveRow;
+        speedButton.FlatAppearance.MouseDownBackColor = TubeTheme.ActiveRow;
+        speedButton.BackColor = TubeTheme.Background;
+        speedButton.ForeColor = TubeTheme.Strong;
         speedButton.Size = new Size(48, 28);
         speedButton.Padding = Padding.Empty;
         speedButton.TabStop = false;
@@ -849,8 +849,8 @@ internal sealed class VideoPlayerForm : Form
         time.AutoSize = false;
         time.Size = new Size(104, 28);
         time.TextAlign = ContentAlignment.MiddleLeft;
-        time.Font = new Font("Segoe UI", 9f);
-        time.ForeColor = Theme.Text;
+        time.Font = TubeTheme.Font(9f);
+        time.ForeColor = TubeTheme.Text;
         time.Text = "0:00 / 0:00";
         bar.Controls.Add(time);
 
@@ -2354,10 +2354,10 @@ internal sealed class VideoPlayerForm : Form
         muteButton.Text = muted || media.Volume <= 0.001 ? "" : "";
 
         repeatButton.Text = repeat == RepeatMode.One ? "" : "";
-        repeatButton.ForeColor = repeat == RepeatMode.Off ? Theme.Text : Theme.Accent;
+        repeatButton.ForeColor = repeat == RepeatMode.Off ? TubeTheme.Text : TubeTheme.Accent;
 
         speedButton.Text = FormatSpeed(speed);
-        speedButton.ForeColor = Math.Abs(speed - 1.0) < 0.001 ? Theme.Strong : Theme.Accent;
+        speedButton.ForeColor = Math.Abs(speed - 1.0) < 0.001 ? TubeTheme.Strong : TubeTheme.Accent;
     }
 
     private void ApplySeek(double fraction)
@@ -2619,7 +2619,7 @@ internal sealed class VideoPlayerForm : Form
 
         if (ffmpeg == null)
         {
-            Say("Boost needs ffmpeg");
+            Say("Boost needs ffmpeg (download it from UtilTube settings or the Capture page)");
             return;
         }
 
@@ -2746,7 +2746,7 @@ internal sealed class VideoPlayerForm : Form
         endTitle.Margin = new System.Windows.Thickness(0, 0, 0, 4);
 
         endSubtitle.FontSize = 13;
-        endSubtitle.Foreground = Brush(Theme.Text);
+        endSubtitle.Foreground = Brush(TubeTheme.Text);
         endSubtitle.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
         endSubtitle.Margin = new System.Windows.Thickness(0, 0, 0, 16);
 
@@ -2798,8 +2798,8 @@ internal sealed class VideoPlayerForm : Form
             Margin = new System.Windows.Thickness(6, 0, 6, 0),
             BorderThickness = new System.Windows.Thickness(0),
             Cursor = System.Windows.Input.Cursors.Hand,
-            Foreground = primary ? Brush(Theme.Background) : WpfMedia.Brushes.White,
-            Background = primary ? Brush(Theme.Accent) : Brush(Theme.Search),
+            Foreground = primary ? Brush(TubeTheme.Background) : WpfMedia.Brushes.White,
+            Background = primary ? Brush(TubeTheme.Accent) : Brush(TubeTheme.Search),
             Focusable = false
         };
 
@@ -2953,7 +2953,7 @@ internal sealed class VideoPlayerForm : Form
         WpfControls.TextBlock channel = new()
         {
             Text = video.Channel,
-            Foreground = Brush(Theme.Text),
+            Foreground = Brush(TubeTheme.Text),
             FontSize = 11,
             Width = 176,
             TextTrimming = System.Windows.TextTrimming.CharacterEllipsis
@@ -2970,7 +2970,7 @@ internal sealed class VideoPlayerForm : Form
             Padding = new System.Windows.Thickness(6),
             Margin = new System.Windows.Thickness(6),
             Background = WpfMedia.Brushes.Transparent,
-            BorderBrush = first ? Brush(Theme.Accent) : WpfMedia.Brushes.Transparent,
+            BorderBrush = first ? Brush(TubeTheme.Accent) : WpfMedia.Brushes.Transparent,
             BorderThickness = new System.Windows.Thickness(2),
             Cursor = System.Windows.Input.Cursors.Hand,
             Focusable = false,
@@ -2990,8 +2990,8 @@ internal sealed class VideoPlayerForm : Form
         if (cardStyle != null)
             return cardStyle;
 
-        string hover = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.14f));
-        string press = Hex(Theme.Mix(Theme.Background, Theme.Accent, 0.24f));
+        string hover = Hex(TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.14f));
+        string press = Hex(TubeTheme.Mix(TubeTheme.Background, TubeTheme.Accent, 0.24f));
 
         string xaml = $@"
 <Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -3965,7 +3965,7 @@ internal sealed class SeekBar : Control
     {
         Graphics g = e.Graphics;
 
-        g.Clear(Theme.Background);
+        g.Clear(TubeTheme.Background);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
         int left = 8;
@@ -3975,7 +3975,7 @@ internal sealed class SeekBar : Control
 
         float thin = Height < 24 ? 3f : 4f;
 
-        using Pen track = new(Theme.Number, thin)
+        using Pen track = new(TubeTheme.Number, thin)
         {
             StartCap = System.Drawing.Drawing2D.LineCap.Round,
             EndCap = System.Drawing.Drawing2D.LineCap.Round
@@ -3989,7 +3989,7 @@ internal sealed class SeekBar : Control
             float la = (float)(left + span * loadedFrom);
             float lb = (float)(left + span * loadedTo);
 
-            using Pen loaded = new(Color.FromArgb(150, Theme.Strong), thin)
+            using Pen loaded = new(Color.FromArgb(150, TubeTheme.Strong), thin)
             {
                 StartCap = System.Drawing.Drawing2D.LineCap.Round,
                 EndCap = System.Drawing.Drawing2D.LineCap.Round
@@ -4000,7 +4000,7 @@ internal sealed class SeekBar : Control
             // a small tick where loading has got to, so the front edge is easy to see
             if (loadedTo < 0.999)
             {
-                using Pen edge = new(Color.FromArgb(200, Theme.Strong), 1.5f);
+                using Pen edge = new(Color.FromArgb(200, TubeTheme.Strong), 1.5f);
                 g.DrawLine(edge, lb, mid - 5, lb, mid + 5);
             }
         }
@@ -4011,12 +4011,12 @@ internal sealed class SeekBar : Control
             int a = left + (int)(span * MarkA);
             int b = MarkB >= 0 ? left + (int)(span * MarkB) : a;
 
-            using Pen section = new(Theme.On, thin + 2f);
+            using Pen section = new(TubeTheme.On, thin + 2f);
 
             if (b > a)
                 g.DrawLine(section, a, mid, b, mid);
 
-            using SolidBrush marker = new(Theme.On);
+            using SolidBrush marker = new(TubeTheme.On);
             g.FillRectangle(marker, a - 1, mid - 6, 3, 12);
 
             if (MarkB >= 0)
@@ -4025,7 +4025,7 @@ internal sealed class SeekBar : Control
 
         float x = (float)(left + span * value);
 
-        using Pen fill = new(Theme.Accent, thin)
+        using Pen fill = new(TubeTheme.Accent, thin)
         {
             StartCap = System.Drawing.Drawing2D.LineCap.Round,
             EndCap = System.Drawing.Drawing2D.LineCap.Round
@@ -4034,7 +4034,7 @@ internal sealed class SeekBar : Control
         if (x > left)
             g.DrawLine(fill, left, mid, x, mid);
 
-        using SolidBrush thumb = new(Theme.Strong);
+        using SolidBrush thumb = new(TubeTheme.Strong);
         int radius = Height < 24 ? 5 : 6;
         g.FillEllipse(thumb, x - radius, mid - radius, radius * 2, radius * 2);
     }

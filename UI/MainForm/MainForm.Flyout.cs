@@ -381,7 +381,7 @@ public sealed partial class MainForm
             return false;
 
         height = Math.Max(16, (int)(rowsPanel.Height * (float)MaxRows / count));
-        float progress = scrollTop / (float)(count - MaxRows);
+        float progress = Math.Clamp(scrollVisual / (count - MaxRows), 0f, 1f);
         top = (int)((rowsPanel.Height - height) * progress);
         return true;
     }

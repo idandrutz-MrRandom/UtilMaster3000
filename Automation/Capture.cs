@@ -544,6 +544,13 @@ internal sealed class FfmpegRecorder
         Path = path;
     }
 
+    /// <summary>Look again next time (after ffmpeg was downloaded).</summary>
+    public static void ForgetSearch()
+    {
+        searched = false;
+        cachedPath = null;
+    }
+
     public static string? FindFfmpeg()
     {
         if (searched)
@@ -553,6 +560,13 @@ internal sealed class FfmpegRecorder
 
         try
         {
+            // The copy the app downloaded itself comes first.
+            if (File.Exists(FfmpegInstaller.OwnCopyPath))
+            {
+                cachedPath = FfmpegInstaller.OwnCopyPath;
+                return cachedPath;
+            }
+
             string[] extra =
             {
                 System.IO.Path.Combine(

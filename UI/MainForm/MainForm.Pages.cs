@@ -196,13 +196,13 @@ public sealed partial class MainForm
             ["Learn"] = Renumber(new[]
             {
                 Act("", "How it works", () => Say("How it works",
-                    "The translator converts Latin characters into Cyrillic as you type, in any application.")),
+                    "Letter conversion En -> Ru turns the English (Latin) letters you type into Russian (Cyrillic) letters, in any application.")),
 
                 Act("", "Examples", () => Say("Examples",
                     "privet -> привет\n\nshchuka -> щука\n\nzhuk -> жук\n\nyu -> ю")),
 
-                Act("", "Using the translator", () => Say("Using the translator",
-                    $"Tap {FormatHotkey(toggleKey)} to turn live transliteration on or off.\n\n" +
+                Act("", "Using letter conversion En -> Ru", () => Say("Using letter conversion En -> Ru",
+                    $"Tap {FormatHotkey(toggleKey)} to turn letter conversion En -> Ru on or off.\n\n" +
                     $"Hold it ({HoldLabel()}) to open this menu without toggling.\n\n" +
                     $"{FormatHotkey(launcherKey)} also opens the menu.")),
 
@@ -222,6 +222,7 @@ public sealed partial class MainForm
                 BackEntry()
             }),
 
+            ["Guide"] = BuildGuidePage(),
             ["Style"] = BuildStylePage(),
             ["Typing"] = BuildTypingPage(),
             ["TypingStyles"] = BuildTypingStylesPage(),
@@ -234,10 +235,13 @@ public sealed partial class MainForm
 
             ["Setup"] = Renumber(new[]
             {
+                new MenuEntry(0, "", "Set-up guide...", targetPage: "Guide"),
+                new MenuEntry(0, "", "Re-order the main menu...", run: OpenMenuOrder,
+                    expandText: "Opens a window where you drag the menu's rows into the order you want."),
                 new MenuEntry(0, "", "Shortcuts...", targetPage: "Shortcuts"),
                 new MenuEntry(0, "", $"Hold to open menu: {HoldLabel()}", command: "hold"),
                 new MenuEntry(0, "\uE765", $"Typing mode: {ModeNames[(int)translator.Mode]}...", targetPage: "Typing"),
-                new MenuEntry(0, "", $"Live conversion: {OnOff(translator.Enabled)}", command: "toggle"),
+                new MenuEntry(0, "", $"Letter conversion En -> Ru now: {OnOff(translator.Enabled)}", command: "toggle"),
                 new MenuEntry(0, "", $"Hide on focus loss: {OnOff(settings.HideOnFocusLoss)}", command: "focus-hide"),
                 new MenuEntry(0, "\uE700", $"Slide-out menus on hover: {OnOff(settings.HoverSubmenus)}",
                     run: () =>
@@ -271,7 +275,7 @@ public sealed partial class MainForm
             ["About"] = Renumber(new[]
             {
                 Act("", "UtilMaster3000", () => Say("UtilMaster3000",
-                    "A lightweight offline launcher with live Latin-to-Russian transliteration and a pile of everyday utilities.")),
+                    "A lightweight offline launcher with letter conversion En -> Ru and a pile of everyday utilities.")),
 
                 Act("", "Version", () => Say("Version",
                     $"Version {Application.ProductVersion.Split('+')[0]}\n\nThis is a local build; there is no online update source configured.")),
@@ -310,6 +314,9 @@ public sealed partial class MainForm
             ["Tools"] = BuildToolsPage(),
             ["Windows"] = BuildWindowsPage()
         };
+
+        // The user's own modules (a page for the list, one for each module).
+        AddModulePages(pages);
     }
 
     private static void Say(string title, string message) =>
@@ -533,8 +540,8 @@ public sealed partial class MainForm
 
     private List<MenuEntry> BuildTextPage() => Renumber(new[]
     {
-        TextAction("", "Latin → Russian", Transliterator.Convert),
-        TextAction("", "Russian → Latin", Transliterator.ToLatin),
+        TextAction("", "Letter conversion En -> Ru", Transliterator.Convert),
+        TextAction("", "Letter conversion Ru -> En", Transliterator.ToLatin),
         TextAction("", "UPPERCASE", TextTools.Upper),
         TextAction("", "lowercase", TextTools.Lower),
         TextAction("", "Title Case", TextTools.Title),
@@ -1364,6 +1371,7 @@ public sealed partial class MainForm
             "home" => query.Length == 0 ? mainEntries : HomeSearch(query),
             "Apps" => AppsPage(query),
             "Find" => FindPage(query),
+            "Functions" => FunctionsPage(query),
             "Clipboard" => ClipboardPage(query),
             "Shortcuts" => ShortcutsPage(query),
             "TextTool" => TextToolPage(query),
@@ -1537,6 +1545,13 @@ public sealed partial class MainForm
 
         list.AddRange(mainEntries.Where(e =>
             e.Label.Contains(query, StringComparison.OrdinalIgnoreCase)));
+
+        // Any action or setting in the launcher whose name (or description) fits.
+        if (query.Length >= 2)
+        {
+            list.AddRange(FunctionMatches(query, 8,
+                list.Select(x => x.targetPage).Where(p => p != null).ToList()));
+        }
 
         list.AddRange(WindowList.GetOpenWindows()
             .Where(w => MatchesAll(w.Title, query))
@@ -1715,15 +1730,15 @@ public sealed partial class MainForm
                 break;
 
             case "status":
-                Say("Translator status",
+                Say("Letter conversion En -> Ru",
                     translator.Enabled
-                        ? "The translator is currently ON."
-                        : "The translator is currently OFF.");
+                        ? "Letter conversion En -> Ru is currently ON."
+                        : "Letter conversion En -> Ru is currently OFF.");
                 break;
 
             case "shortcut":
                 Say("Keyboard shortcuts",
-                    $"Translator: {FormatHotkey(toggleKey)}  (hold: {HoldLabel()})\n" +
+                    $"Letter conversion En -> Ru: {FormatHotkey(toggleKey)}  (hold: {HoldLabel()})\n" +
                     $"Launcher: {FormatHotkey(launcherKey)}");
                 break;
 
