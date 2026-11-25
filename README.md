@@ -104,8 +104,13 @@ Screenshots and screen recording (default keys in brackets).
 
 - **Screenshot:** choose area (`Print Screen`), full screen (`Ctrl + Print Screen`), active window (`Alt + Print Screen`). Goes to the clipboard, a file, or both.
 - **Record:** choose area (`Shift + Print Screen`), full screen (`Ctrl + Shift + Print Screen`). MP4 with ffmpeg, otherwise a short GIF (30 s max). Press the same key to stop.
-- **Options:** recording quality (standard / high / max), frame rate (30 / 60), record system sound, send finished recordings to the clipboard, **Menu opens while recording** (when off, the launcher key stops the recording; when on, it opens the menu and the recording keeps going).
+- **Options:** recording quality, frame rate, record system sound, send finished recordings to the clipboard, **Menu opens while recording** (when off, the launcher key stops the recording; when on, it opens the menu and the recording keeps going).
 - Screenshots go to `Pictures\UtilMaster3000`, recordings to `Videos\UtilMaster3000`; both have an *Open folder* row.
+- **Quality and output** (Capture → *Quality and output...*):
+  - *Screenshots:* format (PNG lossless, JPG, BMP), JPG quality, size (100 / 75 / 50 / 25 %), include the mouse pointer (full screen and window shots), a wait before capturing (3 / 5 / 10 s), and the folder.
+  - *Video (MP4):* quality (small file, standard, high, max, near-lossless), frame rate (10 to 60), video size (100 / 75 / 50 / 25 %), **encoder** (CPU, or your NVIDIA / AMD / Intel graphics card: only ones this PC really supports are offered, each is tested first), CPU speed, the pointer, sound quality (96 to 320 kbps), a countdown before recording, and the folder.
+  - *GIF:* frame rate, widest picture and longest length.
+  - Click a row for the next value, right-click for the previous one. Folder rows: click to choose, right-click for the default.
 - Toasts and the recording banner are hidden from the recording itself.
 
 ### Tools
@@ -189,7 +194,12 @@ Inside `target`, `args` and `text` you can use `{clipboard}`, `{clipboard-url}` 
 A module that cannot be read still appears, with the reason. Modules run what their author wrote, so only add ones you trust.
 
 ### About
-Version and build info, *Open settings folder*.
+Version and build info, *Open settings folder*, and **Updates**.
+
+**Updates** (About → Updates) asks this project's public GitHub releases whether a newer version exists. It shows what's new, and for the one-file `UtilMaster3000.exe` it can download the new file, check it against the SHA-256 checksum GitHub published for it, and restart on the new version (the old file is kept as `%APPDATA%\UtilMaster3000\update\previous.exe`). A build run from the source folder only opens the release page.
+- It checks automatically at most once a day, a few seconds after start (turn off with *Check automatically*), or by hand with *Check for updates now*. *Skip version* silences one release.
+- Only the public release list is read. No login, no token, nothing about you is sent. Files from anywhere but this project's release downloads, or without a matching checksum, are refused.
+- **Update log** (About → Updates → Update log) lists what changed in every version, offline. It comes from `CHANGELOG.md`, which is built into the program: add a `## 1.0.3 - date` section with `- ` lines before each release.
 
 ### System
 Hide to tray · Lock · Sleep · Sign out · Restart · Shut down (all confirm) · Close app.
@@ -202,6 +212,8 @@ An offline-friendly YouTube client built on yt-dlp. Open it from **Tools → Uti
 - **Subscriptions:** newest videos from channels you follow
 - **Saved videos:** everything stored on the PC, watchable with no internet (filter by unwatched / in progress / watched, sort by newest, oldest, title, length)
 - **History**, **Watch later** (no account needed), **Playlists**, **Downloads**, **Sources** (channels, playlists and topics kept up to date), **Settings**
+- **Playlists:** two tabs. **My playlists** are made by you and kept on your PC (no account): click *+ New playlist*, then add videos with the **+** button in the player (or the **Q** key, or right-click a video > *Add to playlist*, which also has *Watch later*). Each playlist is a chip you can click; *Rename* and *Delete* are on the right. **From YouTube** fetches the playlists on your account by itself when you open it and shows them as cards like on YouTube (cover, number of videos, who can see it, when it was updated; sign in with Google once). Click a card to open it, and *All my playlists* to come back; you can also paste a link or reopen ones you loaded before. For either tab, *Play*, *Shuffle*, *Loop* and *Save all* work on the list on screen.
+- **In the player:** the **More** (...) menu is grouped into *Playback*, *Picture* and *This video*. **Subtitles** (also the **C** key) opens a picker that finds the tracks by itself, groups them (written by the uploader / automatic), has a search box when there are many, and a *Text size* control that is remembered.
 - **Its look:** by default UtilTube matches the launcher: the same theme colours, border frame, font and background picture (shown behind the panels), with its own themed title bar and scroll bars. In **Settings → Look** you can give it colours of its own instead: pick a look (*Same as the launcher*, Dark, Midnight, Deep purple, Forest, Warm, Black, Light), pick the accent, background, panel and text colours yourself, and choose the video size (small / normal / large). It updates while you change it, and the video player follows it too.
 - Click a video to watch immediately; the newest recommended and subscribed videos are saved in the background
 - When UtilTube needs yt-dlp or ffmpeg it asks first, then shows a **download bar** with the percent, the speed and how long is left

@@ -113,6 +113,30 @@ internal sealed class AppSettings
     public int RecordingFps { get; set; } = 30;
     public bool RecordFullScreen { get; set; }
 
+    // ---- Capture > Quality and output ----
+
+    // Screenshots: 0 = PNG (lossless), 1 = JPG, 2 = BMP.
+    public int ScreenshotFormat { get; set; }
+    public int ScreenshotJpgQuality { get; set; } = 92;
+    public int ScreenshotScalePercent { get; set; } = 100;
+    public bool ScreenshotCursor { get; set; }
+    public int ScreenshotDelaySeconds { get; set; }
+    public string ScreenshotFolder { get; set; } = "";
+
+    // Video recordings. The quality itself is RecordingQuality (above) and the frame rate RecordingFps.
+    public int RecordingScalePercent { get; set; } = 100;
+    public int RecordingPreset { get; set; } = 1;          // x264 speed: 0 fastest ... 3 smallest files
+    public int RecordingEncoder { get; set; }              // 0 CPU, 1 NVIDIA, 2 AMD, 3 Intel
+    public bool RecordingCursor { get; set; } = true;
+    public int RecordingAudioKbps { get; set; } = 192;
+    public int RecordingCountdownSeconds { get; set; }
+    public string RecordingFolder { get; set; } = "";
+
+    // GIF recordings.
+    public int GifFps { get; set; } = 10;
+    public int GifMaxWidth { get; set; } = 720;
+    public int GifMaxSeconds { get; set; } = 30;
+
     // Screen recordings (MP4) also capture the sound the PC is playing.
     public bool RecordSound { get; set; } = true;
     // What the typing converter does: 0 = Russian, 1 = Weird text, 2 = Off.
@@ -151,6 +175,14 @@ internal sealed class AppSettings
 
     // The set-up guide opens by itself once, on the very first start.
     public bool GuideShown { get; set; }
+
+    // Ask GitHub for a newer version at most once a day, a little after the app starts.
+    // (Only the project's public release list is read; nothing about you is sent.)
+    public bool AutoCheckUpdates { get; set; } = true;
+
+    // When it was last asked (UTC ticks, 0 = never) and a version the user chose to ignore.
+    public long LastUpdateCheck { get; set; }
+    public string SkippedUpdate { get; set; } = "";
 
     // The order of the home menu (by row name). Empty = the default order.
     public List<string> MenuOrder { get; set; } = new();

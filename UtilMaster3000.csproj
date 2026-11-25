@@ -9,6 +9,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Version>1.0.1</Version>
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
 
     <!-- Keep memory low: workstation, non-concurrent GC returns memory sooner. -->
     <ServerGarbageCollector>false</ServerGarbageCollector>
@@ -31,6 +32,9 @@
   <ItemGroup>
     <Compile Remove="UtilMaster3000\**" />
     <EmbeddedResource Remove="UtilMaster3000\**" />
+    <!-- The in-app update log (About > Updates > Update log). -->
+    <EmbeddedResource Include="CHANGELOG.md" />
+    <EmbeddedResource Include="Assets/app.ico" LogicalName="app.ico" />
     <None Remove="UtilMaster3000\**" />
   </ItemGroup>
 </Project>

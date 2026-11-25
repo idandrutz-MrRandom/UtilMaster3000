@@ -915,6 +915,70 @@ internal static class SystemTools
         return bitmap;
     }
 
+    // ---- the mouse pointer on a screenshot ----
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorPoint { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorInfo
+    {
+        public int Size, Flags;
+        public IntPtr Handle;
+        public CursorPoint Position;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorIconInfo
+    {
+        public bool IsIcon;
+        public int HotspotX, HotspotY;
+        public IntPtr Mask, Colour;
+    }
+
+    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CursorInfo info);
+    [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr icon, out CursorIconInfo info);
+    [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr dc, int x, int y, IntPtr icon, int width, int height, int step, IntPtr brush, int flags);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+
+    /// <summary>Draws the mouse pointer (where it is now) onto a picture of the screen starting at <paramref name="origin"/>.</summary>
+    public static void DrawCursor(Bitmap bitmap, Point origin)
+    {
+        CursorInfo info = new() { Size = Marshal.SizeOf<CursorInfo>() };
+
+        if (!GetCursorInfo(ref info) || (info.Flags & 1) == 0 || info.Handle == IntPtr.Zero)
+            return;
+
+        if (!GetIconInfo(info.Handle, out CursorIconInfo icon))
+            return;
+
+        try
+        {
+            int x = info.Position.X - origin.X - icon.HotspotX;
+            int y = info.Position.Y - origin.Y - icon.HotspotY;
+
+            using Graphics g = Graphics.FromImage(bitmap);
+            IntPtr dc = g.GetHdc();
+
+            try
+            {
+                DrawIconEx(dc, x, y, info.Handle, 0, 0, 0, IntPtr.Zero, 3);
+            }
+            finally
+            {
+                g.ReleaseHdc(dc);
+            }
+        }
+        finally
+        {
+            if (icon.Mask != IntPtr.Zero)
+                DeleteObject(icon.Mask);
+
+            if (icon.Colour != IntPtr.Zero)
+                DeleteObject(icon.Colour);
+        }
+    }
+
     public static Color PixelAt(Point point)
     {
         using Bitmap bitmap = new(1, 1);

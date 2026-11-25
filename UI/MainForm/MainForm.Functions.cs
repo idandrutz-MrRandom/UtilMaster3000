@@ -18,6 +18,7 @@ public sealed partial class MainForm
     private static readonly Dictionary<string, string> FunctionPages = new()
     {
         ["Capture"] = "Capture",
+        ["CaptureQuality"] = "Capture > Quality and output",
         ["Tools"] = "Tools",
         ["Text"] = "Text",
         ["Windows"] = "Windows",
@@ -37,6 +38,8 @@ public sealed partial class MainForm
         ["Shortcuts"] = "Setup > Shortcuts",
         ["Auto"] = "Tools > Autoclicker",
         ["About"] = "About",
+        ["Updates"] = "About > Updates",
+        ["UpdateLog"] = "About > Updates > Update log",
         ["System"] = "System"
     };
 

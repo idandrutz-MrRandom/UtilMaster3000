@@ -133,6 +133,18 @@ internal sealed class TubeSettings
     public string LookText { get; set; } = "";
     public string LookAccent { get; set; } = "";
 
+    /// <summary>
+    /// How the menu's background picture is laid out behind UtilTube: -1 = like the menu,
+    /// otherwise a BackgroundFit (0 Fill, 1 Fit, 2 Stretch, 3 Original, 4 Tile).
+    /// </summary>
+    public int PictureFit { get; set; } = -1;
+
+    /// <summary>Where the picture sits: -1 = like the menu, 0..8 (row by row, 4 = centre).</summary>
+    public int PictureAlign { get; set; } = -1;
+
+    /// <summary>How strong the picture shows, percent: -1 = like the menu.</summary>
+    public int PictureStrength { get; set; } = -1;
+
     /// <summary>Size of the video thumbnails: 0 small, 1 normal, 2 large.</summary>
     public int CardSize { get; set; } = 1;
 
@@ -144,6 +156,9 @@ internal sealed class TubeSettings
 
     /// <summary>Subtitle language to switch on automatically ("" = off).</summary>
     public string SubtitleLanguage { get; set; } = "";
+
+    /// <summary>How big subtitles are drawn, percent of the normal size.</summary>
+    public int SubtitleScale { get; set; } = 100;
 
     // Simultaneous downloads. One keeps memory, CPU and network light.
     public int Parallel { get; set; } = 1;
@@ -199,6 +214,22 @@ internal sealed class SavedPlaylist
     public string Title { get; set; } = "";
     public int Count { get; set; }
     public DateTime Loaded { get; set; } = DateTime.Now;
+
+    // For the playlist cards (filled in from YouTube, a few at a time, in the background).
+    public string ThumbId { get; set; } = "";             // a video id: its picture is the cover
+    public string Availability { get; set; } = "";        // "public", "unlisted" or "private" ("" = not known yet)
+    public DateTime? Modified { get; set; }
+    public bool DetailsKnown { get; set; }
+    public DateTime? DetailsAt { get; set; }
+}
+
+/// <summary>A playlist you made yourself (kept on this computer).</summary>
+internal sealed class LocalPlaylist
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public DateTime Created { get; set; } = DateTime.Now;
+    public List<VideoInfo> Videos { get; set; } = new();
 }
 
 internal sealed class TubeData
@@ -228,6 +259,9 @@ internal sealed class TubeData
     // Local lists (no account needed).
     public List<HistoryEntry> History { get; set; } = new();
     public List<VideoInfo> WatchLater { get; set; } = new();
+
+    // Playlists you made yourself.
+    public List<LocalPlaylist> MyLists { get; set; } = new();
 
     // Playback speed remembered per channel.
     public Dictionary<string, double> ChannelSpeeds { get; set; } = new();
@@ -436,8 +470,53 @@ internal sealed class TubeLibrary
     {
         lock (gate)
         {
+            // Keep what is already known about each playlist (count, privacy, ...), so the cards do not blank out.
+            foreach (SavedPlaylist p in list)
+            {
+                SavedPlaylist? old = data.MyPlaylists.FirstOrDefault(o => o.Id == p.Id);
+
+                if (old == null)
+                    continue;
+
+                if (p.ThumbId.Length == 0)
+                    p.ThumbId = old.ThumbId;
+
+                if (!p.DetailsKnown)
+                {
+                    p.Count = old.Count;
+                    p.Availability = old.Availability;
+                    p.Modified = old.Modified;
+                    p.DetailsKnown = old.DetailsKnown;
+                    p.DetailsAt = old.DetailsAt;
+                }
+            }
+
             data.MyPlaylists = list;
             data.MyPlaylistsUpdated = DateTime.Now;
+        }
+
+        Changed();
+    }
+
+    /// <summary>Stores what YouTube said about one of your playlists (how many videos, who can see it, ...).</summary>
+    public void SetPlaylistDetails(string id, PlaylistDetails details)
+    {
+        lock (gate)
+        {
+            SavedPlaylist? p = data.MyPlaylists.FirstOrDefault(o => o.Id == id);
+
+            if (p == null)
+                return;
+
+            p.Count = details.Count;
+            p.Availability = details.Availability;
+            p.Modified = details.Modified;
+
+            if (details.ThumbId.Length > 0)
+                p.ThumbId = details.ThumbId;
+
+            p.DetailsKnown = true;
+            p.DetailsAt = DateTime.Now;
         }
 
         Changed();
@@ -882,6 +961,100 @@ internal sealed class TubeLibrary
         Changed();
     }
 
+
+    // ---- your own playlists (local, no account needed) ----
+
+    public List<LocalPlaylist> MyLists()
+    {
+        lock (gate)
+        {
+            return data.MyLists
+                .Select(l => new LocalPlaylist { Id = l.Id, Name = l.Name, Created = l.Created, Videos = l.Videos.ToList() })
+                .ToList();
+        }
+    }
+
+    public LocalPlaylist? MyList(string id) => MyLists().FirstOrDefault(l => l.Id == id);
+
+    public LocalPlaylist CreateList(string name)
+    {
+        LocalPlaylist list = new() { Name = name.Trim().Length > 0 ? name.Trim() : "New playlist" };
+
+        lock (gate)
+            data.MyLists.Add(list);
+
+        Changed();
+        return list;
+    }
+
+    public void RenameList(string id, string name)
+    {
+        lock (gate)
+        {
+            LocalPlaylist? list = data.MyLists.FirstOrDefault(l => l.Id == id);
+
+            if (list != null && name.Trim().Length > 0)
+                list.Name = name.Trim();
+        }
+
+        Changed();
+    }
+
+    public void DeleteList(string id)
+    {
+        lock (gate)
+            data.MyLists.RemoveAll(l => l.Id == id);
+
+        Changed();
+    }
+
+    public bool ListHas(string listId, string videoId)
+    {
+        lock (gate)
+            return data.MyLists.FirstOrDefault(l => l.Id == listId)?.Videos.Any(v => v.Id == videoId) == true;
+    }
+
+    /// <summary>Adds the video to the list, or takes it out when it is there. Returns true when it is now in.</summary>
+    public bool ToggleInList(string listId, TubeVideo video)
+    {
+        bool now;
+
+        lock (gate)
+        {
+            LocalPlaylist? list = data.MyLists.FirstOrDefault(l => l.Id == listId);
+
+            if (list == null)
+                return false;
+
+            if (list.Videos.RemoveAll(v => v.Id == video.Id) == 0)
+            {
+                list.Videos.Add(new VideoInfo(video.Id, video.Title, video.Channel, video.Duration));
+                now = true;
+            }
+            else
+            {
+                now = false;
+            }
+        }
+
+        Changed();
+        return now;
+    }
+
+    public void RemoveFromList(string listId, string videoId)
+    {
+        lock (gate)
+            data.MyLists.FirstOrDefault(l => l.Id == listId)?.Videos.RemoveAll(v => v.Id == videoId);
+
+        Changed();
+    }
+
+    /// <summary>How many of your playlists hold this video.</summary>
+    public int ListsHolding(string videoId)
+    {
+        lock (gate)
+            return data.MyLists.Count(l => l.Videos.Any(v => v.Id == videoId));
+    }
     // ---- playback speed remembered per channel ----
 
     public double? ChannelSpeed(string channel)

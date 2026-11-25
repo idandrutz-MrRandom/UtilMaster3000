@@ -28,6 +28,11 @@ internal sealed class TubeSettingsList : GlassPanel
 
     private const string Font = "Consolas";
 
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010, SWP_NOCOPYBITS = 0x0100;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
     private readonly List<Item> items = new();
     private readonly GlassPanel inner = new();
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 16 };
@@ -44,7 +49,26 @@ internal sealed class TubeSettingsList : GlassPanel
         BackColor = TubeTheme.Background;
         inner.BackColor = TubeTheme.Background;
         scroll.Visible = false;
-        scroll.ValueChanged += (_, _) => inner.Top = -scroll.Value;
+        scroll.ValueChanged += (_, _) =>
+        {
+            if (inner.Top == -scroll.Value)
+                return;
+
+            // Moving a window makes Windows slide its old pixels along. The menu's picture stays
+            // put behind the rows, so the slid copy is wrong (old rows stayed behind as ghosts).
+            // SWP_NOCOPYBITS says "do not copy": the whole panel is painted afresh instead.
+            if (TubeGlass.Active && inner.IsHandleCreated)
+            {
+                SetWindowPos(inner.Handle, IntPtr.Zero, inner.Left, -scroll.Value, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+
+                inner.Invalidate(true);
+            }
+            else
+            {
+                inner.Top = -scroll.Value;
+            }
+        };
 
         Controls.Add(inner);
         Controls.Add(scroll);

@@ -23,6 +23,8 @@ internal sealed record DownloadProgress(double Percent, string Speed, string Eta
 /// <summary>A loaded playlist: its title and videos.</summary>
 internal sealed record PlaylistData(string Id, string Title, string Channel, List<VideoInfo> Videos);
 
+internal sealed record PlaylistDetails(int Count, string Availability, DateTime? Modified, string ThumbId);
+
 internal sealed record StreamInput(string Url, Dictionary<string, string> Headers);
 
 /// <summary>One subtitle track of a video (a language, written by hand or automatic).</summary>
@@ -1299,7 +1301,27 @@ internal static class YtDlp
                     string? title = Str(e, "title");
 
                     if (id != null && title != null && !found.Any(p => p.Id == id))
-                        found.Add(new SavedPlaylist { Id = id, Title = title });
+                    {
+                        SavedPlaylist item = new() { Id = id, Title = title };
+
+                        // The cover is the picture of its first video: the id is in the thumbnail's address.
+                        if (e.TryGetProperty("thumbnails", out JsonElement thumbs) &&
+                            thumbs.ValueKind == JsonValueKind.Array && thumbs.GetArrayLength() > 0)
+                        {
+                            Match tm = Regex.Match(Str(thumbs[0], "url") ?? "", @"/vi(?:_webp)?/([A-Za-z0-9_-]{11})/");
+
+                            if (tm.Success)
+                                item.ThumbId = tm.Groups[1].Value;
+                        }
+
+                        if (e.TryGetProperty("playlist_count", out JsonElement pc) && pc.ValueKind == JsonValueKind.Number)
+                        {
+                            item.Count = pc.GetInt32();
+                            item.DetailsKnown = false;
+                        }
+
+                        found.Add(item);
+                    }
                 }
                 catch
                 {
@@ -1322,6 +1344,96 @@ internal static class YtDlp
                 .OrderBy(p => p.Id.Length <= 3 ? 1 : 0)
                 .ToList();
         });
+    }
+
+    /// <summary>
+    /// How many videos a playlist holds, who can see it and when it last changed (one small request).
+    /// Uses your account, so private playlists and Liked videos / Watch later work.
+    /// </summary>
+    public static async Task<PlaylistDetails> PlaylistDetailsAsync(string id, CancellationToken ct)
+    {
+        async Task<PlaylistDetails> Run(string? cookies)
+        {
+            List<string> args = new()
+            {
+                "--flat-playlist", "--dump-single-json", "--no-warnings", "--ignore-errors",
+                "--playlist-end", "1"
+            };
+
+            if (cookies != null)
+            {
+                args.Add("--cookies");
+                args.Add(cookies);
+            }
+
+            args.Add("https://www.youtube.com/playlist?list=" + id);
+
+            ProcResult r = await RunAsync(args, ct);
+            string json = r.Stdout.Trim();
+
+            if (!json.StartsWith('{'))
+            {
+                string? error = LastError(r.Stderr);
+
+                if (error != null && LooksLikeAuthError(error))
+                    throw new AuthExpiredException();
+
+                throw new InvalidOperationException(error ?? "Could not read the playlist.");
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
+
+            int count = root.TryGetProperty("playlist_count", out JsonElement c) && c.ValueKind == JsonValueKind.Number
+                ? c.GetInt32()
+                : 0;
+
+            string thumb = "";
+
+            if (root.TryGetProperty("entries", out JsonElement entries) && entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement e in entries.EnumerateArray())
+                {
+                    string? vid = e.ValueKind == JsonValueKind.Object ? Str(e, "id") : null;
+
+                    if (vid is { Length: 11 })
+                    {
+                        thumb = vid;
+                        break;
+                    }
+                }
+
+                // Some answers have no count: the entries then say how many there are (at most the one asked for).
+                if (count == 0 && thumb.Length > 0)
+                    count = 1;
+            }
+
+            DateTime? modified = null;
+            string? date = Str(root, "modified_date");
+
+            if (date is { Length: 8 } &&
+                DateTime.TryParseExact(date, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out DateTime parsed))
+            {
+                modified = parsed;
+            }
+
+            return new PlaylistDetails(count, Str(root, "availability") ?? "", modified, thumb);
+        }
+
+        if (YtAccount.SignedIn)
+        {
+            try
+            {
+                return await YtAccount.WithCookieFile(file => Run(file));
+            }
+            catch (AuthExpiredException)
+            {
+                // Fall back to anonymous below.
+            }
+        }
+
+        return await Run(null);
     }
 
     /// <summary>Loads a playlist (title + videos). Private ones need your account.</summary>

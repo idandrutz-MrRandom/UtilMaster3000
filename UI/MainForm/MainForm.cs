@@ -304,7 +304,7 @@ public sealed partial class MainForm : Form
             (_, _) => ExitApplication()
         );
 
-        trayIcon.Icon = SystemIcons.Application;
+        StartIcons();
         trayIcon.Text = "UtilMaster3000";
         trayIcon.ContextMenuStrip = trayMenu;
         trayIcon.Visible = true;
@@ -530,6 +530,9 @@ public sealed partial class MainForm : Form
             SaveSettings();
             ShowPage("Guide");
         }
+
+        if (Updater.CanSelfInstall || !Debugger.IsAttached)
+            AutoCheckForUpdates();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -625,6 +628,10 @@ public sealed partial class MainForm : Form
         currentPage == "Notifications" ? "Style" :
         currentPage == "Typing" ? "Setup" :
         currentPage == "Pinned" ? "Tools" :
+        currentPage == "Updates" ? "About" :
+        currentPage == "CaptureQuality" ? "Capture" :
+        currentPage == "MakeShortcut" ? "Tools" :
+        currentPage == "UpdateLog" ? "Updates" :
         currentPage.StartsWith(ModulePrefix, StringComparison.Ordinal) ? "Modules" :
         currentPage == "TypingStyles" ? "Typing" :
         currentPage.StartsWith("Style", StringComparison.Ordinal) && currentPage != "Style" ? "Style" :
@@ -879,6 +886,8 @@ public sealed partial class MainForm : Form
                 ? $"home / Modules / {Trunc(modules.FirstOrDefault(m => ModulePrefix + m.Id == page)?.Name ?? page[ModulePrefix.Length..], 20)}"
             : page == "Notifications"
                 ? "home / Style / Notifications"
+            : page == "MakeShortcut"
+                ? "home / Tools / Create shortcut"
             : page == "VaultEntry"
                 ? $"home / Vault / {Trunc(openEntry?.Title ?? "", 22)}"
                 : page == "TextTool"
@@ -889,6 +898,7 @@ public sealed partial class MainForm : Form
         {
             "home" => "Search apps, files, math, web...",
             "Apps" => "Search apps...",
+            "MakeShortcut" => "Search the app to make a shortcut for...",
             "Find" => "Search files and open windows...",
             "Functions" => "Search every function and setting...",
             "Clipboard" => "Search clipboard history...",

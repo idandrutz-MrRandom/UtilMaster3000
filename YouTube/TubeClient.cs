@@ -132,7 +132,7 @@ internal sealed class TubeClient : Form
         {
             current = new TubeClient();
             current.FormClosed += (_, _) => current = null;
-            current.Show();
+            OpenAnimation.Show(current);
         }
         else
         {
@@ -191,6 +191,21 @@ internal sealed class TubeClient : Form
         // UtilTube's own look: follow it when it is changed in Settings.
         TubeTheme.Changed += OnLookChanged;
         FormClosed += (_, _) => TubeTheme.Changed -= OnLookChanged;
+        // The window's icon follows the colours too (the menu's, or UtilTube's own look).
+        RefreshTubeIcon();
+        iconTimer.Tick += (_, _) =>
+        {
+            iconTimer.Stop();
+            RefreshTubeIcon();
+        };
+        Theme.Configured += RestartTubeIconTimer;
+        FormClosed += (_, _) =>
+        {
+            Theme.Configured -= RestartTubeIconTimer;
+            iconTimer.Dispose();
+        };
+
+        CloseAnimation.Attach(this);
 
         // Make sure background downloading is running.
         library.Start();
@@ -256,6 +271,19 @@ internal sealed class TubeClient : Form
     }
 
     // The look changed (preset, colours, video size): recolour what was coloured when it
+    private readonly System.Windows.Forms.Timer iconTimer = new() { Interval = 400 };
+
+    private void RefreshTubeIcon()
+    {
+        if (!IsDisposed)
+            Icon = AppIcon.Get(IconKind.Tube, SystemInformation.IconSize);
+    }
+
+    private void RestartTubeIconTimer()
+    {
+        iconTimer.Stop();
+        iconTimer.Start();
+    }
     // was built; everything drawn on demand picks the new colours up by itself.
     private void OnLookChanged(List<(Color Old, Color New)> map)
     {
@@ -268,6 +296,7 @@ internal sealed class TubeClient : Form
             return;
         }
 
+        RestartTubeIconTimer();
         SuspendLayout();
 
         BackColor = TubeTheme.FrameColor;
@@ -593,6 +622,8 @@ internal sealed class TubeClient : Form
         BuildPlaylistBar();
 
         body.Controls.Add(grid);
+        playlistCards.Visible = false;
+        body.Controls.Add(playlistCards);
         body.Controls.Add(emptyAction);
         body.Controls.Add(empty);
         body.Controls.Add(sourcesView);
@@ -751,7 +782,9 @@ internal sealed class TubeClient : Form
         View.History => "Watch history",
         View.Later => "Watch later",
         View.Queue => "Downloads",
-        View.Playlists => playlistTitle.Length > 0 ? playlistTitle : "Playlists",
+        View.Playlists => playlistTab == PlaylistHeader.Tab.Mine
+            ? (ActiveList()?.Name ?? "Playlists")
+            : (ytBrowse ? "YouTube playlists" : (playlistTitle.Length > 0 ? playlistTitle : "Playlists")),
         View.Sources => "Sources",
         _ => "Settings"
     };
@@ -799,6 +832,7 @@ internal sealed class TubeClient : Form
         }
 
         grid.Visible = videos;
+        ApplyPlaylistSurface();
         sourcesView.Visible = target == View.Sources;
         settingsView.Visible = target == View.Settings;
 
@@ -906,7 +940,9 @@ internal sealed class TubeClient : Form
                 return searchResults.Select(Resolve).ToList();
 
             case View.Playlists:
-                return playlistResults.Select(Resolve).ToList();
+                return playlistTab == PlaylistHeader.Tab.Mine
+                    ? (ActiveList()?.Videos ?? new List<VideoInfo>()).Select(Resolve).ToList()
+                    : playlistResults.Select(Resolve).ToList();
 
             case View.Library:
             {
@@ -969,6 +1005,20 @@ internal sealed class TubeClient : Form
 
         titleLabel.Text = TitleFor(view);
 
+        if (ShowingCards)
+        {
+            RefreshPlaylistCards();
+            ApplyPlaylistSurface();
+
+            playlistBar.SetHasVideos(false);
+            subtitleLabel.Text = "The playlists on your YouTube account";
+            empty.Visible = false;
+            emptyAction.Visible = false;
+            return;
+        }
+
+        ApplyPlaylistSurface();
+
         if (view == View.Sources)
         {
             RefreshSources();
@@ -988,6 +1038,9 @@ internal sealed class TubeClient : Form
 
         List<TubeVideo> desired = DesiredItems();
         grid.SetItems(desired);
+
+        if (view == View.Playlists)
+            playlistBar.SetHasVideos(desired.Count > 0);
 
         subtitleLabel.Text = SubtitleFor(desired);
 
@@ -1044,8 +1097,22 @@ internal sealed class TubeClient : Form
             }
 
             case View.Playlists:
-                empty.Text = "Pick one of your own playlists above, or paste a playlist link and press Load.\n\n" +
-                             "Then play all of it, shuffle it, or save it for offline viewing.";
+                if (playlistTab == PlaylistHeader.Tab.Mine)
+                {
+                    empty.Text = ActiveList() == null
+                        ? "Make your first playlist: click \"+ New playlist\" above.\n\n" +
+                          "Add videos to it with the + button in the player (or the Q key),\n" +
+                          "or right-click any video and choose Add to playlist."
+                        : "This playlist is empty.\n\n" +
+                          "Add videos with the + button in the player (or the Q key),\n" +
+                          "or right-click a video and choose Add to playlist.";
+                }
+                else
+                {
+                    empty.Text = "Pick one of your YouTube playlists above, or paste a playlist link and press Load.\n\n" +
+                                 "Then play all of it, shuffle it, or save it for offline viewing.";
+                }
+
                 break;
 
             case View.Library:
@@ -1666,6 +1733,21 @@ internal sealed class TubeClient : Form
         SetMessage($"Queued {items.Count} video(s). They save one after another in the background.");
     }
 
+    // Q on a video (or the context menu): choose which of your playlists it goes in.
+    private void AddSelectedToPlaylist()
+    {
+        List<TubeVideo> items = Selected();
+
+        if (items.Count == 0)
+        {
+            SetMessage("Select a video first, then press Q.", 5);
+            return;
+        }
+
+        Point at = grid.PointToScreen(new Point(40, 60));
+        TubeListsMenu.Show(Cursor.Position.X > 0 ? Cursor.Position : at, items[0], text => SetMessage(text, 6), this);
+    }
+
     private void ToggleLaterSelected()
     {
         List<TubeVideo> items = Selected();
@@ -1756,6 +1838,12 @@ internal sealed class TubeClient : Form
 
                 break;
 
+            case View.Playlists when playlistTab == PlaylistHeader.Tab.Mine:
+                foreach (TubeVideo v in items)
+                    library.RemoveFromList(activeListId, v.Id);
+
+                break;
+
             case View.Later:
                 foreach (TubeVideo v in items)
                     library.RemoveWatchLater(v.Id);
@@ -1781,6 +1869,11 @@ internal sealed class TubeClient : Form
             case Keys.D:
             case Keys.S:
                 SaveSelected();
+                e.Handled = true;
+                break;
+
+            case Keys.Q:
+                AddSelectedToPlaylist();
                 e.Handled = true;
                 break;
 
@@ -1818,7 +1911,7 @@ internal sealed class TubeClient : Form
 
     private ContextMenuStrip BuildContextMenu()
     {
-        ContextMenuStrip menu = new();
+        ContextMenuStrip menu = TubeMenu.Create();
 
         menu.Opening += (_, e) =>
         {
@@ -1839,6 +1932,10 @@ internal sealed class TubeClient : Form
 
             menu.Items.Add(library.IsWatchLater(first.Id) ? "Remove from Watch later" : "Watch later", null,
                 (_, _) => ToggleLaterSelected());
+
+            ToolStripMenuItem addToList = new("Add to playlist");
+            TubeListsMenu.Fill(addToList.DropDownItems, first, text => SetMessage(text, 6), this);
+            menu.Items.Add(addToList);
 
             if (first.State == VideoState.Done)
             {
@@ -1869,7 +1966,7 @@ internal sealed class TubeClient : Form
                     menu.Items.Add("Retry", null, (_, _) => library.Retry(first));
             }
 
-            if (view is View.Library or View.Queue or View.History or View.Later)
+            if (view is View.Library or View.Queue or View.History or View.Later || (view == View.Playlists && playlistTab == PlaylistHeader.Tab.Mine))
             {
                 menu.Items.Add(new ToolStripSeparator());
 
@@ -1878,6 +1975,7 @@ internal sealed class TubeClient : Form
                     View.Library => "Delete from PC",
                     View.Queue => "Cancel",
                     View.History => "Remove from history",
+                    View.Playlists => "Remove from this playlist",
                     _ => "Remove from list"
                 };
 
@@ -1907,204 +2005,273 @@ internal sealed class TubeClient : Form
     // PLAYLISTS: load any playlist, play it, shuffle it, save it
     // --------------------------------------------------
 
-    private readonly Panel playlistBar = new();
-    private readonly TextBox playlistBox = new();
-    private readonly ComboBox playlistRecent = new();
+    private readonly PlaylistHeader playlistBar = new();
     private List<VideoInfo> playlistResults = new();
     private string playlistTitle = "";
     private string playlistId = "";
     private CancellationTokenSource? playlistCts;
-    private bool fillingRecent;
 
-    private readonly ComboBox playlistMine = new();
-    private Button playlistLoop = new();
+    // "My playlists" (made by you, kept here) or "From YouTube" (a link / your account).
+    private PlaylistHeader.Tab playlistTab = PlaylistHeader.Tab.Mine;
+    private string activeListId = "";
 
-    private void UpdateLoopButton()
+    // What the header shows in place of your account playlists while they load (or when that failed).
+    private string ytListsStatus = "";
+    private bool ytListsError;
+    private bool ytListsFetching;
+
+    private LocalPlaylist? ActiveList() =>
+        playlistTab == PlaylistHeader.Tab.Mine ? library.MyList(activeListId) : null;
+
+    private void UpdateLoopButton() => playlistBar.SetLoop(library.Settings.PlaylistLoop);
+
+    // ---- your YouTube playlists as cards (like YouTube's own Playlists page) ----
+
+    private readonly PlaylistCards playlistCards = new();
+    private bool ytBrowse = true;            // on the From YouTube tab: show the cards (true) or one opened playlist (false)
+    private bool detailsRunning;
+    private readonly HashSet<string> detailsFailed = new();
+
+    private bool ShowingCards => view == View.Playlists && playlistTab == PlaylistHeader.Tab.YouTube && ytBrowse;
+
+    // Cards or the video grid, whichever the Playlists page should show now.
+    private void ApplyPlaylistSurface()
     {
-        bool on = library.Settings.PlaylistLoop;
+        bool cards = ShowingCards;
 
-        playlistLoop.Text = "Loop: " + (on ? "On" : "Off");
-        playlistLoop.BackColor = on ? TubeTheme.Accent : TubeTheme.Search;
-        playlistLoop.ForeColor = on ? TubeTheme.Background : TubeTheme.Strong;
+        playlistCards.Visible = cards;
+
+        if (view == View.Playlists)
+            grid.Visible = !cards;
+    }
+
+    private void RefreshPlaylistCards()
+    {
+        List<SavedPlaylist> mine = YtAccount.SignedIn ? library.MyPlaylists() : new List<SavedPlaylist>();
+
+        PlaylistCards.State state;
+        string message = "";
+
+        if (!YtAccount.SignedIn)
+        {
+            state = PlaylistCards.State.SignIn;
+        }
+        else if (mine.Count > 0)
+        {
+            state = PlaylistCards.State.Cards;
+        }
+        else if (ytListsError)
+        {
+            state = PlaylistCards.State.Error;
+            message = ytListsStatus + ".";
+        }
+        else if (ytListsFetching || library.MyPlaylistsUpdated == null)
+        {
+            state = PlaylistCards.State.Loading;
+        }
+        else
+        {
+            state = PlaylistCards.State.None;
+        }
+
+        playlistCards.SetItems(mine, state, message);
+
+        if (mine.Any(p => !p.DetailsKnown))
+            _ = FetchPlaylistDetailsAsync();
+    }
+
+    // Fills in how many videos each playlist has, who can see it and when it changed, a few at a time.
+    private async Task FetchPlaylistDetailsAsync()
+    {
+        if (detailsRunning || !YtAccount.SignedIn)
+            return;
+
+        detailsRunning = true;
+
+        try
+        {
+            List<SavedPlaylist> todo = library.MyPlaylists()
+                .Where(p => (!p.DetailsKnown ||
+                             (p.DetailsAt != null && DateTime.Now - p.DetailsAt > TimeSpan.FromHours(12))) &&
+                            !detailsFailed.Contains(p.Id))
+                .ToList();
+
+            using SemaphoreSlim limit = new(3, 3);
+
+            await Task.WhenAll(todo.Select(async p =>
+            {
+                await limit.WaitAsync();
+
+                try
+                {
+                    if (IsDisposed)
+                        return;
+
+                    PlaylistDetails details = await YtDlp.PlaylistDetailsAsync(p.Id, CancellationToken.None);
+                    library.SetPlaylistDetails(p.Id, details);
+                }
+                catch (Exception)
+                {
+                    lock (detailsFailed)
+                        detailsFailed.Add(p.Id);
+                }
+                finally
+                {
+                    limit.Release();
+                }
+            }));
+        }
+        finally
+        {
+            detailsRunning = false;
+        }
+    }
+
+    // Sends the playlists to the header (called when the page opens and whenever they change).
+    private void RefreshPlaylistHeader()
+    {
+        List<LocalPlaylist> lists = library.MyLists();
+
+        if (lists.Count > 0 && !lists.Any(l => l.Id == activeListId))
+            activeListId = lists[0].Id;
+
+        if (lists.Count == 0)
+            activeListId = "";
+
+        playlistBar.SetLists(lists, activeListId);
+        playlistBar.SetYouTube(YtAccount.SignedIn ? library.MyPlaylists() : new List<SavedPlaylist>(),
+            YtAccount.SignedIn, library.Playlists(), playlistId, ytListsStatus, ytListsError,
+            viewing: playlistTab == PlaylistHeader.Tab.YouTube && !ytBrowse);
+        playlistBar.SetHasVideos(grid.Items.Count > 0);
+        UpdateLoopButton();
     }
 
     private void BuildPlaylistBar()
     {
-        playlistBar.Dock = DockStyle.Top;
-        playlistBar.Height = 94;
-        playlistBar.BackColor = TubeTheme.Background;
         playlistBar.Visible = false;
 
-        // ---- row 1: a link, and what to do with the playlist ----
-        playlistBox.Location = new Point(22, 12);
-        playlistBox.Size = new Size(330, 26);
-        playlistBox.BackColor = TubeTheme.Search;
-        playlistBox.ForeColor = TubeTheme.Strong;
-        playlistBox.BorderStyle = BorderStyle.FixedSingle;
-        playlistBox.PlaceholderText = "Paste a playlist link or id...";
-        playlistBox.KeyDown += (_, e) =>
+        playlistBar.ModeChanged += tab =>
         {
-            if (e.KeyCode == Keys.Enter)
+            playlistTab = tab;
+
+            // Your account's playlists are fetched by themselves when you open this tab, and shown as cards.
+            if (tab == PlaylistHeader.Tab.YouTube)
             {
-                e.SuppressKeyPress = true;
-                _ = LoadPlaylistAsync(playlistBox.Text);
+                ytBrowse = true;
+                playlistCards.ScrollToTop();
+                _ = LoadMyPlaylistsAsync(force: false);
             }
+            RefreshView();
+            RefreshPlaylistHeader();
         };
 
-        playlistBar.Controls.Add(playlistBox);
-
-        int x = 360;
-        int y = 9;
-
-        Button Add(string text, int width, Action action)
+        playlistBar.ListChosen += id =>
         {
-            Button b = new()
-            {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(width, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = TubeTheme.Search,
-                ForeColor = TubeTheme.Strong,
-                Cursor = Cursors.Hand,
-                TabStop = false
-            };
+            activeListId = id;
+            RefreshView();
+            RefreshPlaylistHeader();
+        };
 
-            b.FlatAppearance.BorderSize = 0;
-            b.Click += (_, _) => action();
-            playlistBar.Controls.Add(b);
-            x += width + 8;
-            return b;
-        }
-
-        Button load = Add("Load", 64, () => _ = LoadPlaylistAsync(playlistBox.Text));
-        load.BackColor = TubeTheme.Accent;
-        load.ForeColor = TubeTheme.Background;
-
-        Add("Paste", 64, () =>
+        playlistBar.NewListClicked += () =>
         {
-            if (Clipboard.ContainsText())
+            string? name = TubePrompt.Ask(this, "New playlist", "Name of the playlist:");
+
+            if (name == null)
+                return;
+
+            activeListId = library.CreateList(name).Id;
+            playlistTab = PlaylistHeader.Tab.Mine;
+            RefreshView();
+            RefreshPlaylistHeader();
+            SetMessage($"Playlist \"{name}\" made: add videos with the + button or a right-click.", 8);
+        };
+
+        playlistBar.RenameClicked += () =>
+        {
+            LocalPlaylist? list = ActiveList();
+
+            if (list == null)
+                return;
+
+            string? name = TubePrompt.Ask(this, "Rename playlist", "New name:", list.Name);
+
+            if (name == null)
+                return;
+
+            library.RenameList(list.Id, name);
+            RefreshView();
+            RefreshPlaylistHeader();
+        };
+
+        playlistBar.DeleteClicked += () =>
+        {
+            LocalPlaylist? list = ActiveList();
+
+            if (list == null)
+                return;
+
+            if (MessageBox.Show(this,
+                    $"Delete the playlist \"{list.Name}\"?\n\nThe videos themselves are not deleted.",
+                    "Delete playlist", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             {
-                playlistBox.Text = Clipboard.GetText().Trim();
-                _ = LoadPlaylistAsync(playlistBox.Text);
+                return;
             }
-        });
 
-        x += 20;
-        Add("Play in order", 108, PlayPlaylist);
-        Add("Shuffle", 74, () => PlayPlaylist(shuffle: true));
+            library.DeleteList(list.Id);
+            activeListId = "";
+            RefreshView();
+            RefreshPlaylistHeader();
+        };
 
-        playlistLoop = Add("", 96, () =>
+        playlistBar.PlayClicked += PlayPlaylist;
+        playlistBar.ShuffleClicked += () => PlayPlaylist(shuffle: true);
+
+        playlistBar.LoopClicked += () =>
         {
             library.Settings.PlaylistLoop = !library.Settings.PlaylistLoop;
             library.SettingsChanged();
             UpdateLoopButton();
-        });
-        UpdateLoopButton();
+        };
 
-        Add("Save all", 78, SavePlaylistOffline);
+        playlistBar.SaveAllClicked += SavePlaylistOffline;
+        playlistBar.LoadLink += text => _ = LoadPlaylistAsync(text);
+        playlistBar.SignInClicked += SignIn;
+        playlistBar.RefreshClicked += () => _ = LoadMyPlaylistsAsync(force: true);
 
-        // ---- row 2: your account's playlists, and the ones you loaded before ----
-        Label Caption(string text, int left)
+        playlistBar.YouTubeListChosen += p =>
         {
-            Label label = new()
-            {
-                Text = text,
-                Location = new Point(left, 55),
-                AutoSize = true,
-                ForeColor = TubeTheme.Text,
-                BackColor = TubeTheme.Background
-            };
-
-            playlistBar.Controls.Add(label);
-            return label;
-        }
-
-        void Style(ComboBox box, int left, int width)
-        {
-            box.DropDownStyle = ComboBoxStyle.DropDownList;
-            box.FlatStyle = FlatStyle.Flat;
-            box.BackColor = TubeTheme.Search;
-            box.ForeColor = TubeTheme.Strong;
-            box.Location = new Point(left, 52);
-            box.Width = width;
-            box.DisplayMember = nameof(SavedPlaylist.Title);
-            playlistBar.Controls.Add(box);
-        }
-
-        Caption("Your playlists:", 22);
-        Style(playlistMine, 128, 280);
-        playlistMine.SelectionChangeCommitted += (_, _) =>
-        {
-            if (fillingRecent || playlistMine.SelectedItem is not SavedPlaylist p)
-                return;
-
-            if (p.Id.Length == 0)
-                SignIn();
-            else
+            if (p.Id.Length > 0)
                 _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
         };
 
-        Button refresh = new()
-        {
-            Text = "Refresh",
-            Location = new Point(416, 49),
-            Size = new Size(74, 30),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = TubeTheme.Search,
-            ForeColor = TubeTheme.Strong,
-            Cursor = Cursors.Hand,
-            TabStop = false
-        };
-        refresh.FlatAppearance.BorderSize = 0;
-        refresh.Click += (_, _) => _ = LoadMyPlaylistsAsync(force: true);
-        playlistBar.Controls.Add(refresh);
+        // The cards: click one to open it; the same sign-in and retry as the header.
+        playlistCards.Opened += p => _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
+        playlistCards.SignInClicked += SignIn;
+        playlistCards.RetryClicked += () => _ = LoadMyPlaylistsAsync(force: true);
 
-        Caption("Loaded before:", 520);
-        Style(playlistRecent, 624, 260);
-        playlistRecent.SelectionChangeCommitted += (_, _) =>
+        playlistBar.AllPlaylistsClicked += () =>
         {
-            if (!fillingRecent && playlistRecent.SelectedItem is SavedPlaylist p)
-                _ = LoadPlaylistAsync("https://www.youtube.com/playlist?list=" + p.Id);
+            playlistTab = PlaylistHeader.Tab.YouTube;
+            ytBrowse = true;
+            playlistCards.ScrollToTop();
+            RefreshView();
+            RefreshPlaylistHeader();
+            _ = LoadMyPlaylistsAsync(force: false);
         };
+
+        RefreshPlaylistHeader();
     }
 
     private void RefreshMyPlaylistsUi()
     {
-        fillingRecent = true;
+        RefreshPlaylistHeader();
 
-        try
-        {
-            playlistMine.Items.Clear();
-
-            if (!YtAccount.SignedIn)
-            {
-                playlistMine.Items.Add(new SavedPlaylist { Id = "", Title = "Sign in to see your playlists..." });
-                playlistMine.SelectedIndex = 0;
-                return;
-            }
-
-            List<SavedPlaylist> mine = library.MyPlaylists();
-
-            foreach (SavedPlaylist p in mine)
-                playlistMine.Items.Add(p);
-
-            if (mine.Count == 0)
-            {
-                playlistMine.Items.Add(new SavedPlaylist { Id = "", Title = "Loading your playlists..." });
-                playlistMine.SelectedIndex = 0;
-            }
-            else
-            {
-                int current = mine.FindIndex(p => p.Id == playlistId);
-                playlistMine.SelectedIndex = current;
-            }
-        }
-        finally
-        {
-            fillingRecent = false;
-        }
+        if (ShowingCards)
+            RefreshPlaylistCards();
     }
+
+    private void RefreshPlaylistRecent() => RefreshPlaylistHeader();
 
     private async Task LoadMyPlaylistsAsync(bool force)
     {
@@ -2121,6 +2288,14 @@ internal sealed class TubeClient : Form
             return;
         }
 
+        if (ytListsFetching)
+            return;
+
+        ytListsFetching = true;
+        ytListsStatus = "Loading your playlists...";
+        ytListsError = false;
+        RefreshMyPlaylistsUi();
+
         try
         {
             List<SavedPlaylist> mine = await YtDlp.MyPlaylistsAsync(CancellationToken.None);
@@ -2128,54 +2303,40 @@ internal sealed class TubeClient : Form
             if (mine.Count > 0)
             {
                 library.SetMyPlaylists(mine);
+                ytListsStatus = "";
 
                 if (force)
                     SetMessage($"{mine.Count} playlists on your account", 8);
             }
-            else if (force)
+            else
             {
-                SetMessage("No playlists found on your account.", 8);
+                ytListsStatus = "No playlists on your account yet";
+
+                if (force)
+                    SetMessage("No playlists found on your account.", 8);
             }
         }
         catch (AuthExpiredException)
         {
+            ytListsStatus = "Google ended your session";
+            ytListsError = true;
             SetMessage("Google ended your session: sign in again to see your playlists.", 12);
         }
         catch (Exception ex)
         {
+            ytListsStatus = "Could not load your playlists";
+            ytListsError = true;
+
             if (force)
                 SetMessage("Could not load your playlists: " + ex.Message, 12);
         }
-
-        RefreshMyPlaylistsUi();
-    }
-
-    private void RefreshPlaylistRecent()
-    {
-        fillingRecent = true;
-
-        try
-        {
-            List<SavedPlaylist> saved = library.Playlists();
-
-            playlistRecent.Items.Clear();
-            playlistRecent.DisplayMember = nameof(SavedPlaylist.Title);
-
-            foreach (SavedPlaylist p in saved)
-                playlistRecent.Items.Add(p);
-
-            // Show the one on screen, or a hint when there are none yet.
-            int current = saved.FindIndex(p => p.Id == playlistId);
-
-            if (current >= 0)
-                playlistRecent.SelectedIndex = current;
-            else
-                playlistRecent.SelectedIndex = -1;
-        }
         finally
         {
-            fillingRecent = false;
+            ytListsFetching = false;
         }
+
+        if (!IsDisposed)
+            RefreshMyPlaylistsUi();
     }
 
     private async Task LoadPlaylistAsync(string text)
@@ -2219,7 +2380,10 @@ internal sealed class TubeClient : Form
             playlistResults = data.Videos;
             playlistTitle = data.Title;
             playlistId = data.Id;
-            playlistBox.Text = "";
+            playlistBar.LinkText = "";
+            playlistTab = PlaylistHeader.Tab.YouTube;
+            ytBrowse = false;                       // show the playlist that was opened, not the cards
+            playlistBar.SetMode(PlaylistHeader.Tab.YouTube);
 
             library.RememberPlaylist(data.Id, data.Title, data.Videos.Count);
 
@@ -2589,9 +2753,37 @@ internal sealed class TubeClient : Form
             v => v == 0 ? "small" : v == 2 ? "large" : "normal",
             "How big the video pictures are. Small fits more on screen.");
 
+        // The menu's background picture behind UtilTube (only while UtilTube follows the launcher's look).
+        string[] fitNames = { "Fill (crop the edges)", "Fit (whole picture)", "Stretch", "Original size", "Tile" };
+        string[] placeNames =
+        {
+            "top left", "top", "top right", "left", "centre", "right", "bottom left", "bottom", "bottom right"
+        };
+
+        Cycle("", "Picture scaling", new[] { -1, 0, 1, 2, 3, 4 },
+            () => s.PictureFit,
+            v => { s.PictureFit = v; Invalidate(true); },
+            v => v < 0 ? "like the menu" : fitNames[Math.Clamp(v, 0, fitNames.Length - 1)],
+            "How the menu's background picture is scaled behind UtilTube.\n" +
+            "Fill covers everything and crops the edges. Fit shows the whole picture. Stretch distorts it to the window. " +
+            "Original size does not scale it. Tile repeats it.\nOnly shows while UtilTube's look is \"Same as the launcher\" and the menu has a picture.");
+
+        Cycle("", "Picture position", new[] { -1, 0, 1, 2, 3, 4, 5, 6, 7, 8 },
+            () => s.PictureAlign,
+            v => { s.PictureAlign = v; Invalidate(true); },
+            v => v < 0 ? "like the menu" : placeNames[Math.Clamp(v, 0, 8)],
+            "Where the picture sits when it does not cover the whole window (Fit, Original size, Tile).");
+
+        Cycle("", "Picture strength", new[] { -1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 },
+            () => s.PictureStrength,
+            v => { s.PictureStrength = v; Invalidate(true); },
+            v => v < 0 ? "like the menu" : v + "%",
+            "How strongly the picture shows through. Lower = fainter.");
+
         list.AddRow("", () => "Reset the look", "Back to matching the launcher, with normal video size.", _ =>
         {
             s.UtilTubeLook = 0;
+            s.PictureFit = s.PictureAlign = s.PictureStrength = -1;
             s.LookBackground = s.LookPanel = s.LookText = s.LookAccent = "";
             s.CardSize = 1;
             library.SettingsChanged();

@@ -223,6 +223,8 @@ public sealed partial class MainForm
             }),
 
             ["Guide"] = BuildGuidePage(),
+            ["Updates"] = BuildUpdatesPage(),
+            ["UpdateLog"] = BuildUpdateLogPage(),
             ["Style"] = BuildStylePage(),
             ["Typing"] = BuildTypingPage(),
             ["TypingStyles"] = BuildTypingStylesPage(),
@@ -277,8 +279,7 @@ public sealed partial class MainForm
                 Act("", "UtilMaster3000", () => Say("UtilMaster3000",
                     "A lightweight offline launcher with letter conversion En -> Ru and a pile of everyday utilities.")),
 
-                Act("", "Version", () => Say("Version",
-                    $"Version {Application.ProductVersion.Split('+')[0]}\n\nThis is a local build; there is no online update source configured.")),
+                new MenuEntry(0, "", $"Updates (version {Updater.Pretty(Updater.Current)})...", targetPage: "Updates"),
 
                 Act("", "Build instructions", () => Say("Build instructions",
                     "Open the project folder in VS Code and run:\n\ndotnet build\n\ndotnet run")),
@@ -311,6 +312,7 @@ public sealed partial class MainForm
 
             ["Text"] = BuildTextPage(),
             ["Capture"] = BuildCapturePage(),
+            ["CaptureQuality"] = BuildCaptureQualityPage(),
             ["Tools"] = BuildToolsPage(),
             ["Windows"] = BuildWindowsPage()
         };
@@ -572,6 +574,7 @@ public sealed partial class MainForm
             Act("\uE714", "UtilTube  (YouTube, offline)", () => OpenTube(null)),
 
             new MenuEntry(0, "\uE896", "Download by link", targetPage: "Grab"),
+            new MenuEntry(0, "", "Create shortcut...", targetPage: "MakeShortcut"),
             new MenuEntry(0, "\uE8EF", "Calculator", targetPage: "Calc"),
             new MenuEntry(0, "\uE962", "Autoclicker", targetPage: "Auto"),
             new MenuEntry(0, "", "Macros", targetPage: "Macros"),
@@ -1370,6 +1373,7 @@ public sealed partial class MainForm
         {
             "home" => query.Length == 0 ? mainEntries : HomeSearch(query),
             "Apps" => AppsPage(query),
+            "MakeShortcut" => MakeShortcutPage(query),
             "Find" => FindPage(query),
             "Functions" => FunctionsPage(query),
             "Clipboard" => ClipboardPage(query),

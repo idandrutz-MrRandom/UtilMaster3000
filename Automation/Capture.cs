@@ -369,7 +369,7 @@ internal sealed class RegionSelector : Form
 
 internal sealed class GifRecorder
 {
-    private const int MaxWidth = 720;
+    private readonly int maxWidth;
 
     private readonly Rectangle region;
     private readonly int outWidth;
@@ -389,12 +389,15 @@ internal sealed class GifRecorder
     /// <summary>Raised when the time limit is reached.</summary>
     public event Action? AutoStopped;
 
-    public GifRecorder(Rectangle region, string path)
+    public GifRecorder(Rectangle region, string path, int fps = 10, int maxWidth = 720)
     {
         this.region = region;
         Path = path;
 
-        double scale = Math.Min(1.0, MaxWidth / (double)region.Width);
+        this.maxWidth = Math.Clamp(maxWidth, 240, 1920);
+        timer.Interval = Math.Max(20, 1000 / Math.Clamp(fps, 2, 30));
+
+        double scale = Math.Min(1.0, this.maxWidth / (double)region.Width);
 
         outWidth = Math.Max(2, (int)(region.Width * scale));
         outHeight = Math.Max(2, (int)(region.Height * scale));
@@ -602,6 +605,56 @@ internal sealed class FfmpegRecorder
         return cachedPath;
     }
 
+    /// <summary>The choices for one video recording.</summary>
+    public sealed record Options(
+        int Fps = 30, int Crf = 18, string Preset = "veryfast", int ScalePercent = 100,
+        bool Cursor = true, int Encoder = 0, int AudioKbps = 192, bool Sound = true);
+
+    private int audioKbps = 192;
+
+    // Encoder names for each choice (0 = the CPU).
+    public static readonly string[] EncoderNames = { "libx264", "h264_nvenc", "h264_amf", "h264_qsv" };
+
+    /// <summary>True when this PC can really encode with that encoder (a tiny test encode).</summary>
+    public static bool EncoderWorks(string ffmpeg, int encoder)
+    {
+        if (encoder <= 0)
+            return true;
+
+        try
+        {
+            ProcessStartInfo info = new(ffmpeg,
+                $"-hide_banner -v error -f lavfi -i nullsrc=s=256x144:d=0.2 -c:v {EncoderNames[Math.Clamp(encoder, 0, 3)]} -f null -")
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using Process test = Process.Start(info)!;
+            test.ErrorDataReceived += (_, _) => { };
+            test.BeginErrorReadLine();
+
+            if (!test.WaitForExit(10_000))
+            {
+                test.Kill();
+                return false;
+            }
+
+            return test.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static FfmpegRecorder Start(
+        string ffmpeg, Rectangle region, string path, int fps, int crf,
+        bool sound = true) =>
+        Start(ffmpeg, region, path, new Options(fps, crf, Sound: sound));
+
     /// <summary>
     /// Starts an H.264 recording.
     ///  * crf: quality (lower = better; 23 standard, 18 high, 14 max)
@@ -609,21 +662,36 @@ internal sealed class FfmpegRecorder
     ///    crashes or the disk fills up, everything but the last couple
     ///    of seconds is still a playable file. Length is unlimited.
     /// </summary>
-    public static FfmpegRecorder Start(
-        string ffmpeg, Rectangle region, string path, int fps, int crf,
-        bool sound = true)
+    public static FfmpegRecorder Start(string ffmpeg, Rectangle region, string path, Options o)
     {
         // H.264 wants even dimensions.
         int width = region.Width & ~1;
         int height = region.Height & ~1;
 
-        string args = string.Create(CultureInfo.InvariantCulture,
-            $"-y -hide_banner -f gdigrab -framerate {fps} -draw_mouse 1 " +
+        int fps = Math.Clamp(o.Fps, 5, 120);
+        int crf = Math.Clamp(o.Crf, 0, 51);
+
+        // A smaller picture (a percentage of the area), kept to even numbers.
+        int percent = Math.Clamp(o.ScalePercent, 10, 100);
+        string scale = percent < 100
+            ? $"-vf \"scale=trunc(iw*{percent}/200)*2:trunc(ih*{percent}/200)*2:flags=lanczos\" "
+            : "";
+
+        string encode = Math.Clamp(o.Encoder, 0, 3) switch
+        {
+            1 => $"-c:v h264_nvenc -preset p4 -rc vbr -cq {crf} -b:v 0 -pix_fmt yuv420p ",
+            2 => $"-c:v h264_amf -quality balanced -rc cqp -qp_i {crf} -qp_p {crf} -pix_fmt yuv420p ",
+            3 => $"-c:v h264_qsv -global_quality {crf} -pix_fmt nv12 ",
+            _ => $"-c:v libx264 -preset {(o.Preset is "ultrafast" or "veryfast" or "faster" or "medium" ? o.Preset : "veryfast")} -crf {crf} -pix_fmt yuv420p "
+        };
+
+        string args =
+            $"-y -hide_banner -f gdigrab -framerate {fps} -draw_mouse {(o.Cursor ? 1 : 0)} " +
             $"-offset_x {region.X} -offset_y {region.Y} " +
             $"-video_size {width}x{height} -i desktop " +
-            $"-c:v libx264 -preset veryfast -crf {crf} -pix_fmt yuv420p " +
+            scale + encode +
             $"-g {fps * 2} -movflags +frag_keyframe+empty_moov+default_base_moof " +
-            $"\"{path}\"");
+            $"\"{path}\"";
 
         ProcessStartInfo info = new(ffmpeg, args)
         {
@@ -639,7 +707,7 @@ internal sealed class FfmpegRecorder
         ChildJob.Add(process);
 
         // Keep the tail of ffmpeg's log: it explains any failure.
-        FfmpegRecorder recorder = new(process, path);
+        FfmpegRecorder recorder = new(process, path) { audioKbps = Math.Clamp(o.AudioKbps, 64, 512) };
 
         process.ErrorDataReceived += (_, e) =>
         {
@@ -649,7 +717,7 @@ internal sealed class FfmpegRecorder
 
         process.BeginErrorReadLine();
 
-        if (sound)
+        if (o.Sound)
             recorder.StartSound();
 
         return recorder;
@@ -716,7 +784,7 @@ internal sealed class FfmpegRecorder
         {
             ProcessStartInfo info = new(ffmpeg,
                 $"-y -hide_banner -i \"{Path}\" -i \"{audioFile}\" " +
-                "-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -ac 2 -ar 48000 -b:a 192k -shortest " +
+                $"-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -ac 2 -ar 48000 -b:a {audioKbps}k -shortest " +
                 $"-movflags +faststart \"{merged}\"")
             {
                 RedirectStandardError = true,

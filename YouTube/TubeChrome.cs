@@ -37,7 +37,13 @@ internal static class TubeGlass
         GraphicsState state = g.Save();
 
         g.TranslateTransform(-at.X, -at.Y);
-        Theme.PaintBackground(g, new Rectangle(Point.Empty, form.ClientSize), form.ClientSize);
+        TubeSettings s = TubeLibrary.Instance.Settings;
+
+        Theme.PaintBackground(g, new Rectangle(Point.Empty, form.ClientSize), form.ClientSize,
+            s.PictureFit >= 0 && Enum.IsDefined(typeof(BackgroundFit), s.PictureFit) ? (BackgroundFit)s.PictureFit : null,
+            s.PictureAlign is >= 0 and <= 8 ? s.PictureAlign : null,
+            s.PictureStrength >= 5 ? Math.Min(s.PictureStrength, 100) / 100f : null,
+            slot: 1);
 
         g.Restore(state);
     }

@@ -30,20 +30,30 @@ public sealed partial class MainForm
         { "clipboard", "file", "clipboard + file" };
 
     private static readonly string[] QualityNames =
-        { "standard", "high", "max" };
+        { "standard", "high", "max", "small file", "near-lossless" };
 
     // x264 constant rate factor: lower = better quality, bigger files.
-    private static readonly int[] QualityCrf = { 23, 18, 14 };
+    // (The first three are the older choices, kept so saved settings still mean the same.)
+    private static readonly int[] QualityCrf = { 23, 18, 14, 28, 10 };
 
-    private static readonly int[] FpsChoices = { 30, 60 };
+    private static readonly int[] FpsChoices = { 10, 15, 24, 30, 48, 60 };
 
-    private static string PicturesFolder => Path.Combine(
+    private static readonly string[] PresetNames = { "ultrafast", "veryfast", "faster", "medium" };
+
+    private static string DefaultPicturesFolder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
         "UtilMaster3000");
 
-    private static string VideosFolder => Path.Combine(
+    private static string DefaultVideosFolder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
         "UtilMaster3000");
+
+    // Where screenshots / recordings go: the folder chosen in Capture > Quality and output, else the default.
+    private string PicturesFolder =>
+        settings.ScreenshotFolder.Length > 0 ? settings.ScreenshotFolder : DefaultPicturesFolder;
+
+    private string VideosFolder =>
+        settings.RecordingFolder.Length > 0 ? settings.RecordingFolder : DefaultVideosFolder;
 
     private static string Stamp() => DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss");
 
@@ -476,7 +486,7 @@ public sealed partial class MainForm
 
             if (HasFfmpeg)
             {
-                list.Add(Act("", "Record area → GIF (30 s max)",
+                list.Add(Act("", $"Record area → GIF ({Math.Clamp(settings.GifMaxSeconds, 5, 600)} s max)",
                     () => StartRecording(false, fullScreen: false)));
             }
             else
@@ -517,6 +527,9 @@ public sealed partial class MainForm
             RefreshPage();
         }));
 
+
+        list.Add(new MenuEntry(0, "", "Quality and output...", targetPage: "CaptureQuality",
+            expandText: "Screenshot format, JPG quality, size, pointer, delay and folder; video quality, frame rate, size, encoder, sound quality and folder; GIF frame rate, width and length."));
 
         list.Add(Act("",
             $"Capture shortcuts: {OnOff(settings.PrintScreenKeys)}", () =>
@@ -583,38 +596,79 @@ public sealed partial class MainForm
     // SCREENSHOTS
     // --------------------------------------------------
 
+    private static readonly string[] ScreenshotFormats = { "PNG (lossless)", "JPG (smaller)", "BMP (raw)" };
+
     // Sends a finished screenshot where the user wants it.
     private void FinishScreenshot(Bitmap bitmap)
     {
         int mode = ScreenshotModeIndex();
 
-        List<string> done = new();
-        string? fileName = null;
+        // A smaller copy when asked (the clipboard and the file both get it).
+        int percent = Math.Clamp(settings.ScreenshotScalePercent, 10, 100);
+        Bitmap? scaled = null;
 
-        if (mode != 1)
+        if (percent < 100)
         {
-            Clipboard.SetImage(bitmap);
-            done.Add("copied");
+            scaled = new Bitmap(
+                Math.Max(1, bitmap.Width * percent / 100), Math.Max(1, bitmap.Height * percent / 100));
+
+            using Graphics g = Graphics.FromImage(scaled);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g.DrawImage(bitmap, 0, 0, scaled.Width, scaled.Height);
         }
 
-        if (mode != 0)
+        Bitmap output = scaled ?? bitmap;
+
+        try
         {
-            Directory.CreateDirectory(PicturesFolder);
+            List<string> done = new();
+            string? fileName = null;
 
-            string path = Path.Combine(
-                PicturesFolder, $"screenshot {Stamp()}.png");
+            if (mode != 1)
+            {
+                Clipboard.SetImage(output);
+                done.Add("copied");
+            }
 
-            bitmap.Save(path, ImageFormat.Png);
+            if (mode != 0)
+            {
+                Directory.CreateDirectory(PicturesFolder);
 
-            fileName = Path.GetFileName(path);
-            done.Add("saved");
+                int format = Math.Clamp(settings.ScreenshotFormat, 0, 2);
+                string extension = format switch { 1 => "jpg", 2 => "bmp", _ => "png" };
+
+                string path = Path.Combine(PicturesFolder, $"screenshot {Stamp()}.{extension}");
+
+                if (format == 1)
+                {
+                    ImageCodecInfo jpeg = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+                    using EncoderParameters quality = new(1);
+
+                    quality.Param[0] = new EncoderParameter(
+                        System.Drawing.Imaging.Encoder.Quality, (long)Math.Clamp(settings.ScreenshotJpgQuality, 10, 100));
+
+                    output.Save(path, jpeg, quality);
+                }
+                else
+                {
+                    output.Save(path, format == 2 ? ImageFormat.Bmp : ImageFormat.Png);
+                }
+
+                fileName = Path.GetFileName(path);
+                done.Add("saved");
+            }
+
+            Toast(
+                "Screenshot " + string.Join(" + ", done) +
+                (fileName != null ? ": " + fileName : ""),
+                OnColor
+            );
         }
-
-        Toast(
-            "Screenshot " + string.Join(" + ", done) +
-            (fileName != null ? ": " + fileName : ""),
-            OnColor
-        );
+        finally
+        {
+            scaled?.Dispose();
+        }
     }
 
     // Runs a capture step after the launcher has faded, guarding against
@@ -626,7 +680,13 @@ public sealed partial class MainForm
 
         captureBusy = true;
 
-        After(HideLauncherForCapture(), () =>
+        // An optional wait first (Capture > Quality and output), to set the screen up.
+        int delay = Math.Clamp(settings.ScreenshotDelaySeconds, 0, 30);
+
+        if (delay > 0)
+            Toast($"Capturing in {delay} s...", OnColor);
+
+        After(HideLauncherForCapture() + delay * 1000, () =>
         {
             try
             {
@@ -679,6 +739,10 @@ public sealed partial class MainForm
         RunCapture(() =>
         {
             using Bitmap shot = SystemTools.CaptureScreen();
+
+            if (settings.ScreenshotCursor)
+                SystemTools.DrawCursor(shot, SystemInformation.VirtualScreen.Location);
+
             FinishScreenshot(shot);
         });
     }
@@ -714,6 +778,10 @@ public sealed partial class MainForm
             }
 
             using Bitmap shot = SystemTools.CaptureRegion(bounds);
+
+            if (settings.ScreenshotCursor)
+                SystemTools.DrawCursor(shot, bounds.Location);
+
             FinishScreenshot(shot);
         });
     }
@@ -776,8 +844,13 @@ public sealed partial class MainForm
                 return;
             }
 
-            // Let the selector disappear before the first frame.
-            After(200, () =>
+            // Let the selector disappear before the first frame (plus the countdown, if one is chosen).
+            int countdown = Math.Clamp(settings.RecordingCountdownSeconds, 0, 30);
+
+            if (countdown > 0)
+                Toast($"Recording starts in {countdown} s...", OnColor);
+
+            After(200 + countdown * 1000, () =>
             {
                 try
                 {
@@ -828,15 +901,26 @@ public sealed partial class MainForm
                 ffmpeg,
                 area,
                 Path.Combine(VideosFolder, $"recording {Stamp()}.mp4"),
-                FpsValue(),
-                QualityCrf[QualityIndex()],
-                settings.RecordSound);
+                new FfmpegRecorder.Options(
+                    Fps: FpsValue(),
+                    Crf: QualityCrf[QualityIndex()],
+                    Preset: PresetNames[Math.Clamp(settings.RecordingPreset, 0, PresetNames.Length - 1)],
+                    ScalePercent: settings.RecordingScalePercent,
+                    Cursor: settings.RecordingCursor,
+                    Encoder: settings.RecordingEncoder,
+                    AudioKbps: settings.RecordingAudioKbps,
+                    Sound: settings.RecordSound));
         }
         else
         {
             GifRecorder recorder = new(
                 area,
-                Path.Combine(VideosFolder, $"recording {Stamp()}.gif"));
+                Path.Combine(VideosFolder, $"recording {Stamp()}.gif"),
+                settings.GifFps,
+                settings.GifMaxWidth)
+            {
+                MaxSeconds = Math.Clamp(settings.GifMaxSeconds, 5, 600)
+            };
 
             recorder.AutoStopped += () => StopRecording();
             recorder.Start();

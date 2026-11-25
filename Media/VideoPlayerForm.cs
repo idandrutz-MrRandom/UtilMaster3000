@@ -425,6 +425,7 @@ internal sealed class VideoPlayerForm : Form
     private readonly Button repeatButton = new();
     private readonly Button muteButton = new();
     private readonly Button moreButton = new();
+    private readonly Button addButton = new();
     private readonly Button fullButton = new();
     private readonly Label time = new();
     private readonly SeekBar seek = new();
@@ -533,11 +534,12 @@ internal sealed class VideoPlayerForm : Form
     /// <summary>Opens the player (one window at a time) at the given item.</summary>
     public static VideoPlayerForm Play(List<TubeVideo> playlist, int index)
     {
-        current?.Close();
+        if (current != null)
+            CloseAnimation.CloseNow(current);
 
         current = new VideoPlayerForm(playlist, index);
         current.FormClosed += (_, _) => current = null;
-        current.Show();
+        OpenAnimation.Show(current);
 
         return current;
     }
@@ -759,6 +761,11 @@ internal sealed class VideoPlayerForm : Form
                 barWindow.Show(this);
         };
         FormClosed += (_, _) => barWindow.Close();
+        CloseAnimation.Attach(this, () =>
+        {
+            if (!barWindow.IsDisposed)
+                barWindow.Hide();
+        });
 
         host.Resize += (_, _) => ApplyFit();
 
@@ -828,6 +835,7 @@ internal sealed class VideoPlayerForm : Form
         IconButton(muteButton, "\uE767", "Mute  (M)");
         IconButton(repeatButton, "\uE8EE", "Repeat  (R)");
         IconButton(moreButton, "\uE712", "More  (F1: shortcuts)");
+        IconButton(addButton, "\uE710", "Add to playlist  (Q)");
         IconButton(fullButton, "\uE740", "Fullscreen  (F)");
 
         speedButton.Text = "1x";
@@ -868,6 +876,7 @@ internal sealed class VideoPlayerForm : Form
         muteButton.Click += (_, _) => ToggleMute();
         repeatButton.Click += (_, _) => CycleRepeat();
         moreButton.Click += (_, _) => ShowMenu(moreButton.PointToScreen(new Point(0, 0)));
+        addButton.Click += (_, _) => ShowAddToPlaylist(addButton.PointToScreen(new Point(0, 0)));
         speedButton.Click += (_, _) => ShowSpeedMenu(speedButton.PointToScreen(new Point(0, 0)));
 
         speedButton.MouseWheel += (_, e) => SetSpeed(speed + (e.Delta > 0 ? 0.05 : -0.05));
@@ -923,6 +932,7 @@ internal sealed class VideoPlayerForm : Form
 
         fullButton.Location = new Point(right - 32, y); right -= 32;
         moreButton.Location = new Point(right - 32, y); right -= 32;
+        addButton.Location = new Point(right - 32, y); right -= 32;
         repeatButton.Location = new Point(right - 32, y); right -= 32;
         speedButton.Location = new Point(right - 48, y);
     }
@@ -1674,52 +1684,65 @@ internal sealed class VideoPlayerForm : Form
 
     private bool SubtitlesAvailable => !LocalMedia.IsLocalId(Current.Id) && !imageMode;
 
-    private ToolStripMenuItem BuildSubtitleMenu(Point where)
-    {
-        string videoId = Current.Id;
-        string state = subCues.Count > 0 ? ": " + subLabel : "";
-        ToolStripMenuItem subs = new("Subtitles" + state + "   (C)");
+    private SubtitlePopup? subtitlePopup;
 
+    // The subtitle picker: opens at once, looks the tracks up by itself and shows what it is doing.
+    private async void ShowSubtitlePicker(Point where)
+    {
         if (!SubtitlesAvailable)
         {
-            subs.DropDownItems.Add(new ToolStripMenuItem("Not available for local files") { Enabled = false });
-            return subs;
+            Say(imageMode ? "Pictures have no subtitles" : "Subtitles are for YouTube videos");
+            return;
         }
+
+        subtitlePopup?.Close();
+
+        string videoId = Current.Id;
+        SubtitlePopup popup = new(subCues.Count > 0 ? subLabel : null, TubeLibrary.Instance.Settings.SubtitleScale);
+        subtitlePopup = popup;
+
+        popup.Chosen += async track =>
+        {
+            popup.Close();
+            await ChooseSubtitleAsync(track, videoId);
+        };
+
+        popup.TurnedOff += () =>
+        {
+            popup.Close();
+            SubtitlesOff();
+        };
+
+        popup.ScaleChanged += percent =>
+        {
+            TubeLibrary.Instance.Settings.SubtitleScale = percent;
+            TubeLibrary.Instance.SaveNow();
+            lastCue = -1;
+        };
+
+        popup.FormClosed += (_, _) =>
+        {
+            if (ReferenceEquals(subtitlePopup, popup))
+                subtitlePopup = null;
+        };
+
+        popup.ShowAbove(this, where);
 
         if (subTracks == null)
         {
-            subs.DropDownItems.Add("Find subtitles for this video", null, async (_, _) =>
-            {
-                await LoadSubtitleTracksAsync();
-
-                if (!IsDisposed && Current.Id == videoId)
-                    BeginInvoke(() => ShowMenu(where));
-            });
-
-            return subs;
+            popup.SetLoading("Looking for subtitles");
+            await LoadSubtitleTracksAsync();
         }
 
-        if (subTracks.Count == 0)
-        {
-            subs.DropDownItems.Add(new ToolStripMenuItem("This video has no subtitles") { Enabled = false });
-            return subs;
-        }
+        if (popup.IsDisposed || Current.Id != videoId)
+            return;
 
-        ToolStripMenuItem off = new("Off") { Checked = subCues.Count == 0 };
-        off.Click += (_, _) => SubtitlesOff();
-        subs.DropDownItems.Add(off);
-        subs.DropDownItems.Add(new ToolStripSeparator());
-
-        foreach (SubtitleTrack track in subTracks)
-        {
-            SubtitleTrack captured = track;
-
-            ToolStripMenuItem item = new(track.Name) { Checked = subCues.Count > 0 && subLabel == track.Name };
-            item.Click += async (_, _) => await ChooseSubtitleAsync(captured, videoId);
-            subs.DropDownItems.Add(item);
-        }
-
-        return subs;
+        if (subTracks == null)
+            popup.SetMessage("Could not look up subtitles. Check your connection and try again.");
+        else if (subTracks.Count == 0)
+            popup.SetMessage("This video has no subtitles.");
+        else
+            popup.SetTracks(subTracks, subCues.Count > 0 ? subLabel : null);
     }
 
     private Task LoadSubtitleTracksAsync()
@@ -2030,7 +2053,7 @@ internal sealed class VideoPlayerForm : Form
         }
 
         // Size follows the window; the text only changes when the cue does.
-        double size = Math.Clamp(host.Height / 22.0, 18, 56);
+        double size = Math.Clamp(host.Height / 22.0, 18, 56) * Math.Clamp(TubeLibrary.Instance.Settings.SubtitleScale, 50, 250) / 100.0;
 
         if (Math.Abs(subtitleText.FontSize - size) > 1)
             subtitleText.FontSize = size;
@@ -3388,48 +3411,67 @@ internal sealed class VideoPlayerForm : Form
 
     private void ShowSpeedMenu(Point where)
     {
-        ContextMenuStrip menu = new();
+        ContextMenuStrip menu = TubeMenu.Create();
+
+        menu.Items.Add(TubeMenu.Header("Playback speed"));
 
         foreach (double preset in SpeedPresets)
         {
             double value = preset;
 
-            ToolStripMenuItem item = new(FormatSpeed(value) + (value == 1.0 ? "  (normal)" : ""))
-            {
-                Checked = Math.Abs(speed - value) < 0.001
-            };
-
-            item.Click += (_, _) => SetSpeed(value);
-            menu.Items.Add(item);
+            menu.Items.Add(TubeMenu.Row(FormatSpeed(value) + (value == 1.0 ? "   normal" : ""), null,
+                () => SetSpeed(value), Math.Abs(speed - value) < 0.001));
         }
 
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Custom...", null, (_, _) => AskCustomSpeed());
+        menu.Items.Add(TubeMenu.Row("Custom...", null, AskCustomSpeed));
 
-        ToolStripMenuItem remember = new("Remember speed per channel")
+        menu.Items.Add(TubeMenu.Row("Remember speed per channel", null, () =>
         {
-            Checked = TubeLibrary.Instance.Settings.RememberChannelSpeed,
-            CheckOnClick = true
-        };
-
-        remember.Click += (_, _) =>
-        {
-            TubeLibrary.Instance.Settings.RememberChannelSpeed = remember.Checked;
+            TubeLibrary.Instance.Settings.RememberChannelSpeed = !TubeLibrary.Instance.Settings.RememberChannelSpeed;
             TubeLibrary.Instance.SettingsChanged();
-        };
+        }, TubeLibrary.Instance.Settings.RememberChannelSpeed));
 
-        menu.Items.Add(remember);
         menu.Show(where);
+    }
+
+    // The "Add to playlist" choices (the + button, the Q key and the menu).
+    private void ShowAddToPlaylist(Point where)
+    {
+        if (LocalMedia.IsLocalId(Current.Id))
+        {
+            Say("Playlists are for YouTube videos");
+            return;
+        }
+
+        TubeListsMenu.Show(where, Current, Say, this);
     }
 
     private void ShowMenu(Point where)
     {
-        ContextMenuStrip menu = new();
+        ContextMenuStrip menu = TubeMenu.Create();
         TubeVideo video = Current;
+        TubeSettings settings = TubeLibrary.Instance.Settings;
         bool saved = video.File != null && File.Exists(video.File);
+        bool local = LocalMedia.IsLocalId(video.Id);
 
-        // repeat
-        ToolStripMenuItem repeatMenu = new("Repeat");
+        // ---- playback ----
+        menu.Items.Add(TubeMenu.Header("Playback"));
+
+        ToolStripMenuItem speedMenu = new($"Speed:  {FormatSpeed(speed)}");
+
+        foreach (double preset in SpeedPresets)
+        {
+            double value = preset;
+            speedMenu.DropDownItems.Add(TubeMenu.Row(FormatSpeed(value), null, () => SetSpeed(value), Math.Abs(speed - value) < 0.001));
+        }
+
+        speedMenu.DropDownItems.Add(new ToolStripSeparator());
+        speedMenu.DropDownItems.Add(TubeMenu.Row("Custom...", null, AskCustomSpeed));
+        menu.Items.Add(speedMenu);
+
+        string repeatName = repeat switch { RepeatMode.One => "this video", RepeatMode.Playlist => "whole list", _ => "off" };
+        ToolStripMenuItem repeatMenu = new("Repeat:  " + repeatName) { ShortcutKeyDisplayString = "R" };
 
         foreach ((RepeatMode mode, string label) in new[]
         {
@@ -3440,137 +3482,119 @@ internal sealed class VideoPlayerForm : Form
         {
             RepeatMode captured = mode;
 
-            ToolStripMenuItem item = new(label) { Checked = repeat == captured };
-
-            item.Click += (_, _) =>
+            repeatMenu.DropDownItems.Add(TubeMenu.Row(label, null, () =>
             {
                 repeat = captured;
                 UpdateButtons();
                 Say("Repeat: " + label.ToLower());
-            };
-
-            repeatMenu.DropDownItems.Add(item);
+            }, repeat == captured));
         }
 
         menu.Items.Add(repeatMenu);
 
-        // A-B
-        string abText = abA < 0 ? "Loop a section: set start (A)"
-            : abB < 0 ? "Loop a section: set end (B)"
+        string abText = abA < 0 ? "Loop a section: set the start"
+            : abB < 0 ? "Loop a section: set the end"
             : "Loop a section: clear";
 
-        menu.Items.Add(abText, null, (_, _) => StepAbLoop());
+        menu.Items.Add(TubeMenu.Row(abText, "A", StepAbLoop));
+        menu.Items.Add(TubeMenu.Row("Skip ahead 85 s", "I", () => Skip(85)));
+        menu.Items.Add(TubeMenu.Row("Step one frame", ". ,", () => StepFrame(1)));
 
-        // speed
-        ToolStripMenuItem speedMenu = new($"Speed ({FormatSpeed(speed)})");
+        ToolStripMenuItem sleepMenu = new("Sleep timer");
 
-        foreach (double preset in SpeedPresets)
+        foreach ((int minutes, string label) in new[] { (0, "Off"), (15, "15 minutes"), (30, "30 minutes"), (60, "1 hour") })
         {
-            double value = preset;
-
-            ToolStripMenuItem item = new(FormatSpeed(value)) { Checked = Math.Abs(speed - value) < 0.001 };
-            item.Click += (_, _) => SetSpeed(value);
-            speedMenu.DropDownItems.Add(item);
+            int captured = minutes;
+            sleepMenu.DropDownItems.Add(TubeMenu.Row(label, null, () => SetSleep(captured)));
         }
 
-        speedMenu.DropDownItems.Add(new ToolStripSeparator());
-        speedMenu.DropDownItems.Add("Custom...", null, (_, _) => AskCustomSpeed());
-        menu.Items.Add(speedMenu);
+        menu.Items.Add(sleepMenu);
 
-        // audio boost
         ToolStripMenuItem boostMenu = new(saved
-            ? $"Audio boost ({(boost > 1 ? "x" + boost.ToString("0.#") : "off")})"
-            : "Audio boost (needs a saved video)")
+            ? $"Audio boost:  {(boost > 1 ? "x" + boost.ToString("0.#") : "off")}"
+            : "Audio boost  (needs a saved video)")
         {
-            Enabled = saved
+            Enabled = saved,
+            ShortcutKeyDisplayString = "V"
         };
 
         foreach (double level in BoostLevels)
         {
             double value = level;
 
-            ToolStripMenuItem item = new(value == 1.0 ? "Off (normal)" : $"x{value:0.#} louder")
-            {
-                Checked = Math.Abs(boost - value) < 0.01
-            };
-
-            item.Click += (_, _) => _ = BoostAsync(value);
-            boostMenu.DropDownItems.Add(item);
+            boostMenu.DropDownItems.Add(TubeMenu.Row(value == 1.0 ? "Off (normal)" : $"x{value:0.#} louder", null,
+                () => _ = BoostAsync(value), Math.Abs(boost - value) < 0.01));
         }
 
         menu.Items.Add(boostMenu);
-        menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Choose the next video...   (U)", null, (_, _) =>
+        menu.Items.Add(TubeMenu.Row("Play the next video by itself", null, () =>
+        {
+            settings.Autoplay = !settings.Autoplay;
+            TubeLibrary.Instance.SettingsChanged();
+        }, settings.Autoplay));
+
+        menu.Items.Add(TubeMenu.Row("Choose the next video...", "U", () =>
         {
             SetPlaying(false);
             ShowEndScreen(allowCountdown: false);
-        });
+        }));
 
-        menu.Items.Add(BuildSubtitleMenu(where));
-        menu.Items.Add("Recommendations beside the video: " +
-            (TubeLibrary.Instance.Settings.PlayerSidebar ? "on" : "off") + "   (G)", null, (_, _) => ToggleSidebar());
-        menu.Items.Add("Video fills window: " + FitNames[TubeLibrary.Instance.Settings.VideoFit] + "   (Z)", null, (_, _) => CycleFit());
-        menu.Items.Add("Open a video file...   (Ctrl+O)", null, (_, _) => OpenFileDialog());
-        menu.Items.Add("Skip ahead 85 s   (I)", null, (_, _) => Skip(85));
-        menu.Items.Add("Take snapshot   (S)", null, (_, _) => Snapshot());
-        menu.Items.Add("Step one frame   (. and ,)", null, (_, _) => StepFrame(1));
+        // ---- picture ----
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(TubeMenu.Header("Picture"));
 
-        // sleep timer
-        ToolStripMenuItem sleepMenu = new("Sleep timer");
+        menu.Items.Add(TubeMenu.Row(subCues.Count > 0 ? "Subtitles:  " + subLabel : "Subtitles...", "C",
+            () => ShowSubtitlePicker(where), subCues.Count > 0, !imageMode));
 
-        foreach ((int minutes, string label) in new[] { (0, "Off"), (15, "15 minutes"), (30, "30 minutes"), (60, "1 hour") })
+        menu.Items.Add(TubeMenu.Row("Video fills the window:  " + FitNames[settings.VideoFit], "Z", CycleFit));
+        menu.Items.Add(TubeMenu.Row("Recommendations beside the video", "G", ToggleSidebar, settings.PlayerSidebar));
+        menu.Items.Add(TubeMenu.Row("Take a snapshot", "S", () => Snapshot()));
+        menu.Items.Add(TubeMenu.Row("Always on top", "T", ToggleTopMost, TopMost));
+
+        // ---- this video ----
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(TubeMenu.Header("This video"));
+
+        if (!local)
         {
-            int captured = minutes;
-            sleepMenu.DropDownItems.Add(label, null, (_, _) => SetSleep(captured));
+            ToolStripMenuItem add = new("Add to playlist") { ShortcutKeyDisplayString = "Q" };
+            TubeListsMenu.Fill(add.DropDownItems, video, Say, this);
+            menu.Items.Add(add);
         }
 
-        menu.Items.Add(sleepMenu);
-
-        ToolStripMenuItem onTop = new("Always on top   (T)") { Checked = TopMost };
-        onTop.Click += (_, _) => ToggleTopMost();
-        menu.Items.Add(onTop);
-
-        ToolStripMenuItem auto = new("Play next video automatically")
+        if (!saved && !local)
         {
-            Checked = TubeLibrary.Instance.Settings.Autoplay
-        };
-
-        auto.Click += (_, _) =>
-        {
-            TubeLibrary.Instance.Settings.Autoplay = !TubeLibrary.Instance.Settings.Autoplay;
-            TubeLibrary.Instance.SettingsChanged();
-        };
-
-        menu.Items.Add(auto);
-        menu.Items.Add(new ToolStripSeparator());
-
-        if (!saved)
-        {
-            menu.Items.Add("Save this video offline", null, (_, _) =>
+            menu.Items.Add(TubeMenu.Row("Save for offline viewing", null, () =>
             {
                 TubeLibrary.Instance.Enqueue(video, priority: true);
                 Say("Saving for offline viewing...");
-            });
+            }));
         }
 
-        menu.Items.Add("Open on YouTube", null, (_, _) =>
-            Process.Start(new ProcessStartInfo(video.Url) { UseShellExecute = true }));
+        menu.Items.Add(TubeMenu.Row("Open a video file...", "Ctrl+O", OpenFileDialog));
 
-        menu.Items.Add("Copy link", null, (_, _) =>
+        if (!local)
         {
-            try
-            {
-                Clipboard.SetText(video.Url);
-                Say("Link copied");
-            }
-            catch (System.Runtime.InteropServices.ExternalException)
-            {
-                // Clipboard busy.
-            }
-        });
+            menu.Items.Add(TubeMenu.Row("Open on YouTube", null, () =>
+                Process.Start(new ProcessStartInfo(video.Url) { UseShellExecute = true })));
 
-        menu.Items.Add("Keyboard shortcuts   (F1)", null, (_, _) => ShowHelp());
+            menu.Items.Add(TubeMenu.Row("Copy the link", null, () =>
+            {
+                try
+                {
+                    Clipboard.SetText(video.Url);
+                    Say("Link copied");
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    // Clipboard busy.
+                }
+            }));
+        }
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(TubeMenu.Row("Keyboard shortcuts", "F1", ShowHelp));
 
         menu.Show(where);
     }
@@ -3592,6 +3616,8 @@ internal sealed class VideoPlayerForm : Form
             "Audio boost           V   (saved videos only)\n" +
             "Frame step            .  next    ,  previous\n" +
             "Snapshot              S\n" +
+            "Add to a playlist     Q   (or the + button)\n" +
+            "Subtitles             C   (More menu: pick a language, text size)\n" +
             "Open a video file      Ctrl+O   (or drop files on the window)\n" +
             "Fullscreen            F or double-click\n" +
             "Always on top         T\n" +
@@ -3752,6 +3778,7 @@ internal sealed class VideoPlayerForm : Form
             case Keys.G: ToggleSidebar(); return true;
             case Keys.Z: CycleFit(); return true;
             case Keys.C: _ = ToggleSubtitlesAsync(); return true;
+            case Keys.Q: ShowAddToPlaylist(addButton.PointToScreen(new Point(0, 0))); return true;
 
             case Keys.Control | Keys.C:
                 if (imageMode)

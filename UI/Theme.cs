@@ -134,6 +134,9 @@ internal static class Theme
     /// <summary>Raised (from a worker thread) when a GIF moves to its next frame.</summary>
     public static event Action? FrameChanged;
 
+    /// <summary>Raised on the calling thread whenever Configure has applied the theme.</summary>
+    public static event Action? Configured;
+
     static Theme()
     {
         Apply("Tokyo Night", null);
@@ -207,6 +210,7 @@ internal static class Theme
             ? 60.0
             : Math.Clamp(s.AnimationSpeedPercent, 20, 400) / 100.0;
         ConfigureFont(s);
+        Configured?.Invoke();
     }
 
     public static Font CreateMenuFont(float size, FontStyle style = FontStyle.Regular) =>
@@ -854,8 +858,11 @@ internal static class Theme
 
         BackgroundImage = null;
         backgroundVersion++;
-        backgroundBake?.Dispose();
-        backgroundBake = null;
+        for (int i = 0; i < backgroundBakes.Length; i++)
+        {
+            backgroundBakes[i]?.Dispose();
+            backgroundBakes[i] = null;
+        }
 
         if (old != null)
         {
@@ -874,8 +881,9 @@ internal static class Theme
     // every repaint after that is a plain copy. Rows repaint on every
     // animation frame, so re-scaling the picture each time was the main
     // cost of a menu with a background.
-    private static Bitmap? backgroundBake;
-    private static (int Image, int Frame, Size Size, BackgroundFit Fit, int Align, float Strength) backgroundBakeKey;
+    // One bake per "slot": 0 = the menu, 1 = UtilTube (which may scale the picture its own way).
+    private static readonly Bitmap?[] backgroundBakes = new Bitmap?[2];
+    private static readonly (int Image, int Frame, Size Size, BackgroundFit Fit, int Align, float Strength)[] backgroundBakeKeys = new (int, int, Size, BackgroundFit, int, float)[2];
     private static int backgroundVersion;
     private static int backgroundFrame;
 
@@ -885,7 +893,8 @@ internal static class Theme
     /// not rescale while the window grows and shrinks; only the part inside
     /// <paramref name="area"/> shows.
     /// </summary>
-    public static void PaintBackground(Graphics g, Rectangle area, Size layout = default)
+    public static void PaintBackground(Graphics g, Rectangle area, Size layout = default,
+        BackgroundFit? fit = null, int? align = null, float? strength = null, int slot = 0)
     {
         Image? image = BackgroundImage;
 
@@ -894,30 +903,36 @@ internal static class Theme
 
         try
         {
+            BackgroundFit useFit = fit ?? Fit;
+            int useAlign = align ?? Align;
+            float useStrength = strength ?? Strength;
+
             Size size = layout.IsEmpty ? area.Size : layout;
             size = new Size(
                 Math.Max(size.Width, area.Right),
                 Math.Max(size.Height, area.Bottom));
 
             var key = (backgroundVersion, animated ? backgroundFrame : 0,
-                size, Fit, Align, Strength);
+                size, useFit, useAlign, useStrength);
 
-            if (backgroundBake == null || !key.Equals(backgroundBakeKey))
+            Bitmap? backgroundBake = backgroundBakes[slot];
+
+            if (backgroundBake == null || !key.Equals(backgroundBakeKeys[slot]))
             {
                 if (backgroundBake == null || backgroundBake.Size != size)
                 {
                     backgroundBake?.Dispose();
-                    backgroundBake = new Bitmap(
+                    backgroundBake = backgroundBakes[slot] = new Bitmap(
                         size.Width, size.Height, PixelFormat.Format32bppPArgb);
                 }
 
                 using (Graphics bake = Graphics.FromImage(backgroundBake))
                 {
                     bake.Clear(Color.Transparent);
-                    RenderBackground(bake, image, new Rectangle(Point.Empty, size));
+                    RenderBackground(bake, image, new Rectangle(Point.Empty, size), useFit, useAlign, useStrength);
                 }
 
-                backgroundBakeKey = key;
+                backgroundBakeKeys[slot] = key;
             }
 
             // Only the part that is actually being repainted.
@@ -982,7 +997,7 @@ internal static class Theme
         }
     }
 
-    private static void RenderBackground(Graphics g, Image image, Rectangle area)
+    private static void RenderBackground(Graphics g, Image image, Rectangle area, BackgroundFit fit, int alignSetting, float strength)
     {
         try
         {
@@ -997,7 +1012,7 @@ internal static class Theme
 
             using ImageAttributes attributes = new();
 
-            attributes.SetColorMatrix(new ColorMatrix { Matrix33 = Strength });
+            attributes.SetColorMatrix(new ColorMatrix { Matrix33 = strength });
 
             float iw = image.Width;
             float ih = image.Height;
@@ -1005,8 +1020,8 @@ internal static class Theme
             float ah = area.Height;
 
             // Alignment anchors: 0 = start, 0.5 = middle, 1 = end.
-            float ax = Align % 3 * 0.5f;
-            float ay = Align / 3 * 0.5f;
+            float ax = alignSetting % 3 * 0.5f;
+            float ay = alignSetting / 3 * 0.5f;
 
             void Draw(RectangleF dest) =>
                 g.DrawImage(
@@ -1016,7 +1031,7 @@ internal static class Theme
                     GraphicsUnit.Pixel,
                     attributes);
 
-            switch (Fit)
+            switch (fit)
             {
                 case BackgroundFit.Stretch:
                     Draw(area);
@@ -1041,7 +1056,7 @@ internal static class Theme
 
                 default:
                 {
-                    float scale = Fit switch
+                    float scale = fit switch
                     {
                         BackgroundFit.Fill => Math.Max(aw / iw, ah / ih),
                         BackgroundFit.Fit => Math.Min(aw / iw, ah / ih),
