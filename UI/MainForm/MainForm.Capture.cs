@@ -217,7 +217,13 @@ public sealed partial class MainForm
                 break;
 
             case "shot-window":
-                ScreenshotWindow(ForegroundTarget());
+                // With "Menu stays visible in screenshots" on, the window shortcut pressed while the menu
+                // is the active window takes a picture of the menu itself.
+                if (settings.ScreenshotKeepMenu && Visible && Native.GetForegroundWindow() == Handle)
+                    ScreenshotThisMenu();
+                else
+                    ScreenshotWindow(ForegroundTarget());
+
                 break;
 
             case "rec-area":
@@ -445,9 +451,13 @@ public sealed partial class MainForm
 
     // Hides the launcher (if shown) and returns how long to wait for the
     // fade to finish before grabbing the screen.
-    private int HideLauncherForCapture()
+    private int HideLauncherForCapture(bool keepMenu = false)
     {
         bool wasVisible = Visible;
+
+        // Capture > "Menu stays in screenshots": leave the menu where it is, so it is in the picture.
+        if (keepMenu && wasVisible)
+            return 120;
 
         HideToTray();
 
@@ -475,6 +485,19 @@ public sealed partial class MainForm
         list.Add(Act("", $"Screenshot: full screen  ({KeyLabel("shot-full")})", ScreenshotFullScreen));
         list.Add(Act("", $"Screenshot: window  ({KeyLabel("shot-window")})",
             () => ScreenshotWindow(null)));
+        list.Add(Act("", "Screenshot: this menu", ScreenshotThisMenu));
+
+        list.Add(new MenuEntry(0, "", $"Menu stays visible in screenshots: {OnOff(settings.ScreenshotKeepMenu)}",
+            run: () =>
+            {
+                settings.ScreenshotKeepMenu = !settings.ScreenshotKeepMenu;
+                SaveSettings();
+                RefreshPage();
+            },
+            expandText: $"Menu stays visible in screenshots: {OnOff(settings.ScreenshotKeepMenu)}" + NL +
+                        "Normally the menu hides before a screenshot is taken. Turn this on to keep it open, so you can capture the app itself " +
+                        "(area, full screen). \"Screenshot: this menu\" takes a picture of just the menu."));
+
 
         if (!IsRecording)
         {
@@ -686,7 +709,7 @@ public sealed partial class MainForm
         if (delay > 0)
             Toast($"Capturing in {delay} s...", OnColor);
 
-        After(HideLauncherForCapture() + delay * 1000, () =>
+        After(HideLauncherForCapture(settings.ScreenshotKeepMenu) + delay * 1000, () =>
         {
             try
             {
@@ -731,6 +754,62 @@ public sealed partial class MainForm
 
             using Bitmap cropped = SystemTools.CaptureRegion(area.Value);
             FinishScreenshot(cropped);
+        });
+    }
+
+    // A picture of the menu itself, as it is on screen now (open it, then use this row or the other capture ways
+    // with "Menu stays visible in screenshots" on).
+    private void ScreenshotThisMenu()
+    {
+        if (captureBusy)
+            return;
+
+        if (!Visible)
+        {
+            Toast("Open the menu first", OffColor);
+            return;
+        }
+
+        captureBusy = true;
+
+        int delay = Math.Clamp(settings.ScreenshotDelaySeconds, 0, 30);
+
+        if (delay > 0)
+            Toast($"Capturing in {delay} s...", OnColor);
+
+        // A moment for the click on this row to settle.
+        After(300 + delay * 1000, () =>
+        {
+            try
+            {
+                Safe(() =>
+                {
+                    if (!Visible)
+                    {
+                        Toast("The menu closed before the picture was taken", OffColor);
+                        return;
+                    }
+
+                    Rectangle bounds = Rectangle.Intersect(Bounds, SystemInformation.VirtualScreen);
+
+                    if (bounds.Width < 2 || bounds.Height < 2)
+                    {
+                        Toast("The menu is not on screen", OffColor);
+                        return;
+                    }
+
+                    using Bitmap shot = SystemTools.CaptureRegion(bounds);
+
+                    if (settings.ScreenshotCursor)
+                        SystemTools.DrawCursor(shot, bounds.Location);
+
+                    FinishScreenshot(shot);
+                });
+            }
+            finally
+            {
+                captureBusy = false;
+            }
         });
     }
 

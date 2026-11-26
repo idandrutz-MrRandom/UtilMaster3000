@@ -959,7 +959,7 @@ public sealed partial class MainForm
                 targets.Add(new MenuIconTarget(key, $"{page} / {entry.Label}"));
         }
 
-        foreach (MenuEntry entry in mainEntries)
+        foreach (MenuEntry entry in fullMainEntries)
             AddTarget("home", entry);
 
         foreach ((string page, List<MenuEntry> entries) in pages)

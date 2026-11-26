@@ -242,6 +242,7 @@ public sealed partial class MainForm : Form
 
         // The menu as it ships, then in the order the user chose (Setup -> Re-order the menu).
         defaultMainOrder = mainEntries.Select(e => e.Label).ToList();
+        fullMainEntries = mainEntries.ToList();
         ApplyMenuOrder();
 
         LoadModules();
@@ -523,6 +524,11 @@ public sealed partial class MainForm : Form
         {
             HideToTray(animate: false);
         }
+        else if (FirstRunMenuModeChoice)
+        {
+            // The very first start: ask how much of the menu is wanted. The set-up guide follows the answer.
+            ShowPage("Mode");
+        }
         else if (!settings.GuideShown)
         {
             // First start: walk the user through the set-up once.
@@ -630,6 +636,7 @@ public sealed partial class MainForm : Form
         currentPage == "Pinned" ? "Tools" :
         currentPage == "Updates" ? "About" :
         currentPage == "CaptureQuality" ? "Capture" :
+        currentPage == "Mode" ? "Setup" :
         currentPage == "MakeShortcut" ? "Tools" :
         currentPage == "UpdateLog" ? "Updates" :
         currentPage.StartsWith(ModulePrefix, StringComparison.Ordinal) ? "Modules" :

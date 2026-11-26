@@ -240,6 +240,12 @@ public sealed partial class MainForm
                 new MenuEntry(0, "", "Set-up guide...", targetPage: "Guide"),
                 new MenuEntry(0, "", "Re-order the main menu...", run: OpenMenuOrder,
                     expandText: "Opens a window where you drag the menu's rows into the order you want."),
+                new MenuEntry(0, "", $"Menu mode: {MenuModeNames[CurrentMenuMode]}",
+                    run: () => CycleMenuMode(1), runAlt: () => CycleMenuMode(-1),
+                    expandText: $"Menu mode: {MenuModeNames[CurrentMenuMode]}" + NL +
+                                "How much of the menu is on the home page: Simple (just the basics), Advanced (most things) or Master (everything). " +
+                                "Nothing is removed; the rest is under More..." + NL +
+                                "Click = next mode, right-click = previous."),
                 new MenuEntry(0, "", "Shortcuts...", targetPage: "Shortcuts"),
                 new MenuEntry(0, "", $"Hold to open menu: {HoldLabel()}", command: "hold"),
                 new MenuEntry(0, "\uE765", $"Typing mode: {ModeNames[(int)translator.Mode]}...", targetPage: "Typing"),
@@ -313,6 +319,8 @@ public sealed partial class MainForm
             ["Text"] = BuildTextPage(),
             ["Capture"] = BuildCapturePage(),
             ["CaptureQuality"] = BuildCaptureQualityPage(),
+            ["More"] = BuildMorePage(),
+            ["Mode"] = BuildMenuModePage(),
             ["Tools"] = BuildToolsPage(),
             ["Windows"] = BuildWindowsPage()
         };
@@ -1547,7 +1555,7 @@ public sealed partial class MainForm
             list.AddRange(toolEntries.Where(e => e.targetPage != null &&
                 e.Label.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
-        list.AddRange(mainEntries.Where(e =>
+        list.AddRange(fullMainEntries.Where(e =>
             e.Label.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
         // Any action or setting in the launcher whose name (or description) fits.

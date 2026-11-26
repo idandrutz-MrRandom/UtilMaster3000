@@ -120,6 +120,9 @@ internal sealed class AppSettings
     public int ScreenshotJpgQuality { get; set; } = 92;
     public int ScreenshotScalePercent { get; set; } = 100;
     public bool ScreenshotCursor { get; set; }
+
+    // The menu stays on screen (and so in the picture) when a screenshot is taken while it is open.
+    public bool ScreenshotKeepMenu { get; set; }
     public int ScreenshotDelaySeconds { get; set; }
     public string ScreenshotFolder { get; set; } = "";
 
@@ -175,6 +178,13 @@ internal sealed class AppSettings
 
     // The set-up guide opens by itself once, on the very first start.
     public bool GuideShown { get; set; }
+
+    // How much of the menu is on the home page: 0 = Simple, 1 = Advanced, 2 = Master (everything).
+    // Asked once on the very first start; installs that were already in use stay on Master.
+    public int UiMode { get; set; } = 2;
+
+    // True once the user picked a mode (so the question is not asked again).
+    public bool ModeChosen { get; set; }
 
     // Ask GitHub for a newer version at most once a day, a little after the app starts.
     // (Only the project's public release list is read; nothing about you is sent.)

@@ -19,6 +19,7 @@ public sealed partial class MainForm
     {
         ["Capture"] = "Capture",
         ["CaptureQuality"] = "Capture > Quality and output",
+        ["Mode"] = "Setup > Menu mode",
         ["Tools"] = "Tools",
         ["Text"] = "Text",
         ["Windows"] = "Windows",

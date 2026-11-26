@@ -3844,11 +3844,36 @@ internal sealed class VideoPlayerForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        WindowStyle.ApplyTitleBar(this);
+        ApplyTubeTitleBar();
+
+        // The title bar follows UtilTube's look (not the menu's), also when it is changed while the player is open.
+        TubeTheme.Changed += OnTubeLookChanged;
+    }
+
+    private void ApplyTubeTitleBar()
+    {
+        if (IsHandleCreated)
+            WindowStyle.ApplyTitleBar(this, TubeTheme.Background, TubeTheme.Strong);
+    }
+
+    private void OnTubeLookChanged(List<(Color Old, Color New)> map)
+    {
+        if (IsDisposed)
+            return;
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(ApplyTubeTitleBar));
+            return;
+        }
+
+        ApplyTubeTitleBar();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        TubeTheme.Changed -= OnTubeLookChanged;
+
         tick.Stop();
         tick.Dispose();
         osdTimer.Stop();

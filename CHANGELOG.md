@@ -3,16 +3,19 @@
 Newest first. Each version is a "## version - date" heading followed by "- " lines;
 this file is built into the program and shown in About > Updates > Update log.
 
-## 1.0.2 - unreleased
+## 1.0.2 - 2026-11-26
 - New: About > Updates checks this project's GitHub releases for a newer version, shows what changed, and can download, verify and install it
 - New: this update log, built into the program (works offline)
 - New: automatic check once a day (can be turned off)
 - New: Tools > Create shortcut: search an app and its shortcut is put on your Desktop
 - New: UtilTube > Settings > Look: choose how the background picture is scaled (fill, fit, stretch, original, tile), where it sits and how strong it is
 - Fixed: scrolling UtilTube settings left old rows and pieces of the background picture behind
+- Fixed: the video player's title bar used the menu's colours instead of UtilTube's own look (it now follows UtilTube's look, also when you change it while the player is open)
 - New: UtilMaster3000 and UtilTube have their own icons (multi-tool and video screen). The tray and window icons change colour with the menu's theme
 - New: UtilTube and the video player fade in when opened and fade out when closed (follows the menu's animation speed)
 - New: Capture > Quality and output: screenshot format (PNG/JPG/BMP), JPG quality, size, mouse pointer, delay and folder; video quality (now 5 levels), frame rate 10-60, video size, encoder (CPU or NVIDIA/AMD/Intel graphics card, tested first), CPU speed, pointer, sound quality, countdown and folder; GIF frame rate, width and length
+- New: Capture > Menu stays visible in screenshots (the menu is no longer hidden first, so you can capture the app itself) and Screenshot: this menu
+- New: menu modes (Simple, Advanced, Master): asked on the very first start, a setting in Setup > Menu mode (click to cycle). Simple and Advanced show fewer rows on the home page; the rest are under More... (nothing is removed). Existing installs stay on Master
 - New: UtilTube playlists you make yourself: a + button in the player (or Q, or right-click a video > Add to playlist) puts a video in one of your playlists; make, rename and delete them on the Playlists page
 - New: the Playlists page has a cleaner header: My playlists (chips) and From YouTube (link, your account, loaded before) tabs, with Play, Shuffle, Loop and Save all
 - New: Playlists > From YouTube shows the playlists on your account by itself, as cards like on YouTube: cover picture, number of videos, name, who can see it, when it was updated. Click one to open it; the counts and privacy fill in as they arrive

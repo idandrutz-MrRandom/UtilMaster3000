@@ -73,6 +73,12 @@ The home page lists the main sections:
 
 New here? Start with **Set-up guide** (it also opens by itself the first time you run the app). It walks through the shortcuts, letter conversion, the look, slide-out menus, screenshots and recording, downloading ffmpeg, UtilTube, the clipboard, the vault and starting with Windows. Click a step to do it, rest on it to read more.
 
+### Menu modes: Simple, Advanced, Master
+The first time you start the app it asks how much of the menu you want on the home page. You can change it any time in **Setup → Menu mode**: it is an ordinary setting row, click it to go Simple → Advanced → Master (right-click goes back), and the home page changes at once. Nothing is ever removed: whatever the mode leaves off the home page is under **More...** (and every feature can still be found with the search).
+- **Simple:** Apps, Find, Capture, Clipboard, Functions and Setup, then **More...**.
+- **Advanced:** most of the important sections (Apps, Find, Capture, Tools, Text, Clipboard, Vault, Windows, Style, Setup, System and Functions); the set-up guide, Modules, Learn and About are under **More...**.
+- **Master:** everything on the home page, as before. Copies of the app that were already in use stay on Master.
+
 ### Search from the home page
 
 Start typing and you get mixed results:
@@ -112,6 +118,7 @@ Screenshots and screen recording (default keys in brackets).
   - *GIF:* frame rate, widest picture and longest length.
   - Click a row for the next value, right-click for the previous one. Folder rows: click to choose, right-click for the default.
 - Toasts and the recording banner are hidden from the recording itself.
+- **Screenshotting the menu:** normally the menu hides before a screenshot is taken. Turn on **Menu stays visible in screenshots** (Capture page) and it stays open, so *choose area* and *full screen* include it. **Screenshot: this menu** takes a picture of just the menu; with that option on, the window shortcut (`Alt + Print Screen`) pressed while the menu is active does the same.
 
 ### Tools
 - **UtilTube** (see below)

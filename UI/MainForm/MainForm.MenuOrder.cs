@@ -23,7 +23,7 @@ public sealed partial class MainForm
     {
         List<string> order = settings.MenuOrder.Count > 0 ? settings.MenuOrder : defaultMainOrder;
 
-        List<MenuEntry> ordered = mainEntries
+        List<MenuEntry> ordered = fullMainEntries
             .OrderBy(e =>
             {
                 int at = order.IndexOf(e.Label);
@@ -33,8 +33,8 @@ public sealed partial class MainForm
 
         List<MenuEntry> numbered = Renumber(ordered);
 
-        mainEntries.Clear();
-        mainEntries.AddRange(numbered);
+        fullMainEntries = numbered;
+        ApplyMenuMode();
     }
 
     private void OpenMenuOrder()
@@ -57,7 +57,7 @@ public sealed partial class MainForm
 
     // The rows as they are now, for the window's list.
     private List<ReorderItem> CurrentMenuItems() =>
-        mainEntries.Select(e => new ReorderItem(e.Label, e.Icon, e.Label)).ToList();
+        fullMainEntries.Select(e => new ReorderItem(e.Label, e.Icon, e.Label)).ToList();
 
     // The window dropped a row somewhere: the menu takes that order and keeps it.
     private void ReorderMainEntries(List<string> keys)

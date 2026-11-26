@@ -3043,7 +3043,7 @@ internal sealed class TubeClient : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        WindowStyle.ApplyTitleBar(this);
+        WindowStyle.ApplyTitleBar(this, TubeTheme.Background, TubeTheme.Strong);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

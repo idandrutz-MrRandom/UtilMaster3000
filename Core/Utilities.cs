@@ -1288,13 +1288,20 @@ internal static class WindowStyle
 
     private static int ColorRef(Color c) => c.R | (c.G << 8) | (c.B << 16);
 
-    public static void ApplyTitleBar(Form form)
+    /// <summary>
+    /// The title bar in the given colours (the menu's when none are given). UtilTube's windows pass its own look,
+    /// which can differ from the menu's.
+    /// </summary>
+    public static void ApplyTitleBar(Form form, Color? background = null, Color? text = null)
     {
         try
         {
-            bool dark = (0.299 * Theme.Background.R +
-                         0.587 * Theme.Background.G +
-                         0.114 * Theme.Background.B) < 128;
+            Color back = background ?? Theme.Background;
+            Color ink = text ?? Theme.Strong;
+
+            bool dark = (0.299 * back.R +
+                         0.587 * back.G +
+                         0.114 * back.B) < 128;
 
             int mode = dark ? 1 : 0;
 
@@ -1303,12 +1310,12 @@ internal static class WindowStyle
             DwmSetWindowAttribute(form.Handle, 19, ref mode, 4);
 
             // Windows 11: caption and border in the app's own colours.
-            int caption = ColorRef(Theme.Background);
-            int text = ColorRef(Theme.Strong);
+            int caption = ColorRef(back);
+            int textColour = ColorRef(ink);
 
             DwmSetWindowAttribute(form.Handle, 35, ref caption, 4);
             DwmSetWindowAttribute(form.Handle, 34, ref caption, 4);
-            DwmSetWindowAttribute(form.Handle, 36, ref text, 4);
+            DwmSetWindowAttribute(form.Handle, 36, ref textColour, 4);
         }
         catch
         {
